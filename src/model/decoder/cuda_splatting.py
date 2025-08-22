@@ -75,8 +75,11 @@ def render_cuda(
 
     b, _, _ = extrinsics.shape
     h, w = image_shape
+    w = 960
+    h = 540  # TODO: rimuovere questo parametro hard-codato e metterlo, IN CASO FOSSE NECESSARIO, dinamico wrt sequenza
 
     fov_x, fov_y = get_fov(intrinsics).unbind(dim=-1)
+    fov_y += 0.048
     tan_fov_x = (0.5 * fov_x).tan()
     tan_fov_y = (0.5 * fov_y).tan()
 

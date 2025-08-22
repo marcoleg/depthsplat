@@ -70,9 +70,9 @@ train:
 
 test:
   output_path: outputs/test
-  compute_scores: true
+  compute_scores: false
   eval_time_skip_steps: 0
-  save_image: false
+  save_image: true
   save_video: false
   save_gt_image: false
   save_input_images: false
@@ -80,7 +80,7 @@ test:
   save_depth_npy: false
   save_depth_concat_img: false
   save_gaussian: false
-  render_chunk_size: null
+  render_chunk_size: 10
   stablize_camera: false
   stab_camera_kernel: 50
 

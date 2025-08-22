@@ -22,7 +22,7 @@ parser.add_argument("--output_dir", type=str, help="processed dataset directory"
 parser.add_argument(
     "--img_subdir",
     type=str,
-    default="images_8",
+    default="images_4",
     help="image directory name",
     choices=[
         "images_4",
@@ -68,7 +68,6 @@ def load_raw(path: Path) -> UInt8[Tensor, " length"]:
 
 def load_images(example_path: Path) -> dict[int, UInt8[Tensor, "..."]]:
     """Load JPG images as raw bytes (do not decode)."""
-
     return {
         int(path.stem.split("_")[-1]): load_raw(path)
         for path in example_path.iterdir()
@@ -156,10 +155,13 @@ def is_image_shape_matched(image_dir, target_shape):
 
 def legal_check_for_all_scenes(root_dir, target_shape):
     valid_folders = []
-    sub_folders = sorted(glob(os.path.join(root_dir, "*/nerfstudio")))
+    sub_folders = sorted(glob(os.path.join(root_dir, "gaussian_splat")))
+    print(root_dir, os.path.join(root_dir, "gaussian_splat"))
+    print(sub_folders)
     for sub_folder in tqdm(sub_folders, desc="checking scenes..."):
-        img_dir = os.path.join(sub_folder, "images_8")  # 270x480
-        # img_dir = os.path.join(sub_folder, 'images_4')  # 540x960
+        # img_dir = os.path.join(sub_folder, args.img_subdir)
+        # img_dir = os.path.join(sub_folder, "images_8")  # 270x480
+        img_dir = os.path.join(sub_folder, 'images_4')  # 540x960
         if not is_image_shape_matched(Path(img_dir), target_shape):
             print(f"image shape does not match for {sub_folder}")
             continue
@@ -174,82 +176,84 @@ def legal_check_for_all_scenes(root_dir, target_shape):
 
 
 if __name__ == "__main__":
-    if "images_8" in args.img_subdir:
-        target_shape = (270, 480)  # (h, w)
-    elif "images_4" in args.img_subdir:
-        target_shape = (540, 960)
-    else:
-        raise ValueError
+    chunk_size = 0
+    chunk_index = 0
+    chunk: list[Example] = []
 
-    print("checking all scenes...")
-    valid_scenes = legal_check_for_all_scenes(INPUT_DIR, target_shape)
-    print("valid scenes:", len(valid_scenes))
+    def save_chunk():
+        global chunk_size
+        global chunk_index
+        global chunk
 
-    for stage in ["test"]:
+        chunk_key = f"{chunk_index:0>6}"
+        dir = OUTPUT_DIR / stage
+        dir.mkdir(exist_ok=True, parents=True)
+        torch.save(chunk, dir / f"{chunk_key}.torch")
 
-        error_logs = []
-        image_dirs = valid_scenes
-
+        # Reset the chunk.
         chunk_size = 0
-        chunk_index = 0
-        chunk: list[Example] = []
+        chunk_index += 1
+        chunk = []
 
-        def save_chunk():
-            global chunk_size
-            global chunk_index
-            global chunk
+    for sequence in os.listdir(INPUT_DIR):
 
-            chunk_key = f"{chunk_index:0>6}"
-            dir = OUTPUT_DIR / stage
-            dir.mkdir(exist_ok=True, parents=True)
-            torch.save(chunk, dir / f"{chunk_key}.torch")
+        if "images_8" in args.img_subdir:
+            target_shape = (270, 480)  # (h, w)
+        elif "images_4" in args.img_subdir:
+            target_shape = (540, 960)
+        else:
+            raise ValueError
 
-            # Reset the chunk.
-            chunk_size = 0
-            chunk_index += 1
-            chunk = []
+        print("checking all scenes...")
+        valid_scenes = legal_check_for_all_scenes(os.path.join(INPUT_DIR, sequence), target_shape)
+        print("valid scenes:", len(valid_scenes))
 
-        for image_dir in tqdm(image_dirs, desc=f"Processing {stage}"):
-            key = os.path.basename(os.path.dirname(image_dir.strip("/")))
+        for stage in ["test"]:
 
-            image_dir = Path(image_dir) / "images_8"  # 270x480
-            # image_dir = Path(image_dir) / 'images_4'  # 540x960
+            error_logs = []
+            image_dirs = valid_scenes
 
-            num_bytes = get_size(image_dir)
+            for image_dir in tqdm(image_dirs, desc=f"Processing {stage}"):
+                key = os.path.basename(os.path.dirname(image_dir.strip("/")))
 
-            # Read images and metadata.
-            try:
-                images = load_images(image_dir)
-            except:
-                print("image loading error")
-                continue
-            meta_path = image_dir.parent / "transforms.json"
-            if not meta_path.is_file():
-                error_msg = f"---------> [ERROR] no meta file in {key}, skip."
-                print(error_msg)
-                error_logs.append(error_msg)
-                continue
-            example = load_metadata(meta_path)
+                # image_dir = Path(image_dir) / "images_8"  # 270x480
+                image_dir = Path(image_dir) / 'images_4'  # 540x960
 
-            # Merge the images into the example.
-            try:
-                example["images"] = [
-                    images[timestamp.item()] for timestamp in example["timestamps"]
-                ]
-            except:
-                error_msg = f"---------> [ERROR] Some images missing in {key}, skip."
-                print(error_msg)
-                error_logs.append(error_msg)
-                continue
+                num_bytes = get_size(image_dir)
 
-            # Add the key to the example.
-            example["key"] = key
+                # Read images and metadata.
+                try:
+                    images = load_images(image_dir)
+                except:
+                    print("image loading error")
+                    continue
+                meta_path = image_dir.parent / "transforms.json"
+                if not meta_path.is_file():
+                    error_msg = f"---------> [ERROR] no meta file in {key}, skip."
+                    print(error_msg)
+                    error_logs.append(error_msg)
+                    continue
+                example = load_metadata(meta_path)
 
-            chunk.append(example)
-            chunk_size += num_bytes
+                # Merge the images into the example.
+                try:
+                    example["images"] = [
+                        images[timestamp.item()] for timestamp in example["timestamps"]
+                    ]
+                except:
+                    error_msg = f"---------> [ERROR] Some images missing in {key}, skip."
+                    print(error_msg)
+                    error_logs.append(error_msg)
+                    continue
 
-            if chunk_size >= TARGET_BYTES_PER_CHUNK:
+                # Add the key to the example.
+                example["key"] = key
+
+                chunk.append(example)
+                chunk_size += num_bytes
+
+                if chunk_size >= TARGET_BYTES_PER_CHUNK:
+                    save_chunk()
+
+            if chunk_size > 0:
                 save_chunk()
-
-        if chunk_size > 0:
-            save_chunk()

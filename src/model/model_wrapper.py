@@ -149,6 +149,10 @@ class ModelWrapper(LightningModule):
         self.benchmarker = Benchmarker()
         self.eval_cnt = 0
 
+        self.target_poses = None
+        self.context_indices = []
+        self.target_indices = []
+
         if self.test_cfg.compute_scores:
             self.test_step_outputs = {}
             self.time_skip_steps_dict = {"encoder": 0, "decoder": 0}
@@ -406,7 +410,12 @@ class ModelWrapper(LightningModule):
         if not self.train_cfg.forward_depth_only:
             with self.benchmarker.time("decoder", num_calls=v):
 
-                camera_poses = batch["target"]["extrinsics"]
+                if self.target_poses is None:
+                    camera_poses = batch["target"]["extrinsics"]  # [batch, num_targets, 4, 4]
+                else:
+                    camera_poses = self.target_poses.to(self.device)
+                    while camera_poses.ndim < 4:
+                        camera_poses = camera_poses.unsqueeze(0)
 
                 if self.test_cfg.stablize_camera:
                     stable_poses = render_stabilization_path(
@@ -537,8 +546,20 @@ class ModelWrapper(LightningModule):
                     save_image(color, path / "images" / scene / f"color/{index:0>6}.png")
                     save_image(gt, path / "images" / scene / f"color/{index:0>6}_gt.png")
             else:
-                for index, color in zip(batch["target"]["index"][0], images_prob):
-                    save_image(color, path / "images" / scene / f"color/{index:0>6}.png")
+
+                if self.context_indices:
+                    context_indices = self.context_indices
+                else:
+                    context_indices = batch['context']['index'].squeeze().tolist()
+
+                if self.target_indices:
+                    target_indices = self.target_indices
+                else:
+                    target_indices = batch["target"]["index"][0]
+
+                dir_name = str(context_indices).replace(', ', '-').removeprefix('[').removesuffix(']')
+                for index, color in zip(target_indices, images_prob):
+                    save_image(color, path / "images" / scene / f"{dir_name}/frame_{index+1:0>5}.png")
 
         # save video
         if self.test_cfg.save_video:
