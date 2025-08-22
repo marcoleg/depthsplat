@@ -174,11 +174,9 @@ def train(cfg_dict: DictConfig):
     if cfg_dict["dataset"]["target_poses"]:
         target_poses = torch.tensor(cfg_dict["dataset"]["target_poses"])
         model_wrapper.target_poses = target_poses
-
-    model_wrapper.context_indices = cfg_dict["dataset"]["context_indices"]
-    model_wrapper.target_names = cfg_dict["dataset"]["target_names"]
-
-    assert len(model_wrapper.target_poses) == len(model_wrapper.target_names)
+        model_wrapper.context_indices = cfg_dict["dataset"]["context_indices"]
+        model_wrapper.target_names = cfg_dict["dataset"]["target_names"]
+        assert len(model_wrapper.target_poses) == len(model_wrapper.target_names)
 
     if cfg.mode == "train":
         print("train:", len(data_module.train_dataloader()))

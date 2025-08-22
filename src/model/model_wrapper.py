@@ -151,7 +151,7 @@ class ModelWrapper(LightningModule):
 
         self.target_poses = None
         self.context_indices = []
-        self.target_indices = []
+        self.target_names = []
 
         if self.test_cfg.compute_scores:
             self.test_step_outputs = {}
@@ -552,14 +552,17 @@ class ModelWrapper(LightningModule):
                 else:
                     context_indices = batch['context']['index'].squeeze().tolist()
 
-                if self.target_indices:
-                    target_indices = self.target_indices
+                if self.target_names:
+                    target_indices = self.target_names
                 else:
                     target_indices = batch["target"]["index"][0]
 
                 dir_name = str(context_indices).replace(', ', '-').removeprefix('[').removesuffix(']')
                 for index, color in zip(target_indices, images_prob):
-                    save_image(color, path / "images" / scene / f"{dir_name}/frame_{index+1:0>5}.png")
+                    if isinstance(index, int):
+                        save_image(color, path / "images" / scene / f"{dir_name}/frame_{index+1:0>5}.png")
+                    elif isinstance(index, str):  # "new_1"
+                        save_image(color, path / "images" / scene / f"{dir_name}/frame_{index}.png")
 
         # save video
         if self.test_cfg.save_video:
