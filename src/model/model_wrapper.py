@@ -559,10 +559,10 @@ class ModelWrapper(LightningModule):
 
                 dir_name = str(context_indices).replace(', ', '-').removeprefix('[').removesuffix(']')
                 for index, color in zip(target_indices, images_prob):
-                    if isinstance(index, int):
-                        save_image(color, path / "images" / scene / f"{dir_name}/frame_{index+1:0>5}.png")
-                    elif isinstance(index, str):  # "new_1"
+                    if isinstance(index, str):  # "new_1"
                         save_image(color, path / "images" / scene / f"{dir_name}/frame_{index}.png")
+                    else:
+                        save_image(color, path / "images" / scene / f"{dir_name}/frame_{index+1:0>5}.png")
 
         # save video
         if self.test_cfg.save_video:

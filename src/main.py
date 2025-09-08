@@ -178,6 +178,11 @@ def train(cfg_dict: DictConfig):
         model_wrapper.target_names = cfg_dict["dataset"]["target_names"]
         assert len(model_wrapper.target_poses) == len(model_wrapper.target_names)
 
+    if cfg_dict["dataset"]["context_indices"]:
+        model_wrapper.context_indices = cfg_dict["dataset"]["context_indices"]
+    if cfg_dict["dataset"]["target_names"]:
+        model_wrapper.target_names = cfg_dict["dataset"]["target_names"]
+
     if cfg.mode == "train":
         print("train:", len(data_module.train_dataloader()))
         print("val:", len(data_module.val_dataloader()))
