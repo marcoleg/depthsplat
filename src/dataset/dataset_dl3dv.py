@@ -223,7 +223,7 @@ class DatasetDL3DV(IterableDataset):
                     except OSError:
                         # some data might be corrupted
                         continue
-
+                    
                     target_images = [
                         example["images"][index.item()] for index in target_indices
                     ]

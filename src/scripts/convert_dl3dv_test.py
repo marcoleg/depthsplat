@@ -87,9 +87,10 @@ class Example(Metadata):
 
 
 def load_metadata(example_path: Path) -> Metadata:
-    blender2opencv = np.array(
-        [[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]]
-    )
+    blender2opencv = np.array([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
+    #blender2opencv = np.array([[0, 1, 0, 0], [0, 0, -1, 0], [-1, 0, 0, 0], [0, 0, 0, 1]])
+    ros2blender = np.array([[0, -1, 0, 0], [0, 0, 1, 0], [-1, 0, 0, 0], [0, 0, 0, 1]])
+
     url = str(example_path).split("/")[-3]
     with open(example_path, "r") as f:
         meta_data = json.load(f)
@@ -116,7 +117,9 @@ def load_metadata(example_path: Path) -> Metadata:
         )
         camera = [saved_fx, saved_fy, saved_cx, saved_cy, 0.0, 0.0]
         # transform_matrix is in blender c2w, while we need to store opencv w2c matrix here
-        opencv_c2w = np.array(frame["transform_matrix"]) @ blender2opencv
+        # opencv_c2w = np.array(frame["transform_matrix"]) @ blender2opencv
+        opencv_c2w = np.array(frame["transform_matrix"]) @ ros2blender.T @ blender2opencv
+
         opencv_c2ws.append(opencv_c2w)
         camera.extend(np.linalg.inv(opencv_c2w)[:3].flatten().tolist())
         cameras.append(np.array(camera))
@@ -200,7 +203,7 @@ if __name__ == "__main__":
         if "images_8" in args.img_subdir:
             target_shape = (270, 480)  # (h, w)
         elif "images_4" in args.img_subdir:
-            target_shape = (540, 960)
+            target_shape = (360, 640) # (540, 960)
         else:
             raise ValueError
 

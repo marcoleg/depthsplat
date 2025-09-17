@@ -74,6 +74,7 @@ class TestCfg:
     render_chunk_size: int | None
     stablize_camera: bool
     stab_camera_kernel: int
+    process_pc: bool
 
 
 @dataclass
@@ -381,7 +382,7 @@ class ModelWrapper(LightningModule):
                 save_image(color, path / "images" / scene / f"color/input_{idx:0>6}.png")
 
         # save depth vis
-        if self.test_cfg.save_depth or self.test_cfg.save_gaussian:
+        if self.test_cfg.save_depth or self.test_cfg.save_gaussian or self.test_cfg.process_pc:
             visualization_dump = {}
         else:
             visualization_dump = None
@@ -402,10 +403,11 @@ class ModelWrapper(LightningModule):
                 gaussians = gaussians["gaussians"]
 
         # save gaussians
-        if self.test_cfg.save_gaussian:
+        if self.test_cfg.save_gaussian or self.test_cfg.process_pc:
             scene = batch["scene"][0]
             save_path = Path(get_cfg()['output_dir']) / 'gaussians' / (scene + '.ply')
-            save_gaussian_ply(gaussians, visualization_dump, batch, save_path)
+            save_gaussian_ply(gaussians, visualization_dump, batch, save_path,
+                              save_pc=self.test_cfg.save_gaussian, process_pc=self.test_cfg.process_pc)
 
         if not self.train_cfg.forward_depth_only:
             with self.benchmarker.time("decoder", num_calls=v):

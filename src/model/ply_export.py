@@ -22,6 +22,56 @@ def construct_list_of_attributes(num_rest: int) -> list[str]:
         attributes.append(f"rot_{i}")
     return attributes
 
+def pointcloud_to_occupancy_grid(points, grid_size=0.1, width=8, height=8, z_threshold=-0.15, z_max=0.5):
+    """
+    Convert 3D point cloud to 2D occupancy grid.
+
+    Args:
+        points (np.ndarray): Nx3 array of 3D points (x,y,z).
+        grid_size (float): resolution of the grid in meters.
+        width (float): total width of the map in meters.
+        height (float): total height of the map in meters.
+        z_threshold (float): minimum z value to consider as obstacle.
+
+    Returns:
+        np.ndarray: 2D occupancy grid (0 = free, 1 = occupied).
+    """
+    # Grid dimensions
+    cols = int(width / grid_size)
+    rows = int(height / grid_size)
+    grid = np.zeros((rows, cols), dtype=np.uint8)
+
+    # Shift points so that map is centered
+    x_points = points["z"] + width / 2.0
+    y_points = -points["x"] + height / 2.0
+    z_points = -points["y"]
+
+    # Filter points within map bounds and above threshold
+    mask = (
+        (x_points >= 0) & (x_points < width) &
+        (y_points >= 0) & (y_points < height) &
+        (z_points > z_threshold) & (z_points < z_max)
+    )
+    x_points = x_points[mask]
+    y_points = y_points[mask]
+
+    # Convert metric coordinates to grid indices
+    col_idx = (x_points / grid_size).astype(int)
+    row_idx = (y_points / grid_size).astype(int)
+
+    # Mark cells as occupied
+    grid[row_idx, col_idx] = 1
+
+    # import matplotlib.pyplot as plt
+    # plt.imshow(grid, cmap="gray_r", origin="lower")
+    # plt.title("Occupancy Grid")
+    # plt.xlabel("X")
+    # plt.ylabel("Y")
+    # plt.scatter(y_points, x_points)
+    # plt.savefig('/root/incremental_splat/ros_ws/src/incremental_splat/src/occupancy_grid.png')
+
+
+    return grid
 
 def export_ply(
     extrinsics: Float[Tensor, "4 4"],
@@ -31,6 +81,8 @@ def export_ply(
     harmonics: Float[Tensor, "gaussian 3 d_sh"],
     opacities: Float[Tensor, " gaussian"],
     path: Path,
+    save_pc: bool,
+    process_pc: bool,
 ):
 
     view_rotation = extrinsics[:3, :3].inverse()
@@ -60,10 +112,38 @@ def export_ply(
     attributes = np.concatenate(attributes, axis=1)
     elements[:] = list(map(tuple, attributes))
     path.parent.mkdir(exist_ok=True, parents=True)
-    PlyData([PlyElement.describe(elements, "vertex")]).write(path)
-    
+    plydata = PlyData([PlyElement.describe(elements, "vertex")])
+    # if save_pc:
+    #     plydata.write(path)
+    if process_pc:
+        v = plydata['vertex'].data
+        arr = np.array(v)
+        # print('v original shape:', v.shape, '\nx: {} ; {}\ny: {} ; {}\nz: {} {}'.format(arr['x'].min(),
+        #                                                                               arr['x'].max(),
+        #                                                                               arr['y'].min(),
+        #                                                                               arr['y'].max(),
+        #                                                                               arr['z'].min(),
+        #                                                                               arr['z'].max()))
+        mask = (
+                (arr['x'] <= 20.0) &
+                (arr['x'] >= -20.0) &
+                (arr['y'] <= 5.0) &
+                (arr['y'] >= -5.0) &
+                (arr['z'] <= 25.0) &
+                (arr['z'] >= -25.0)
+        )
+        close_points = arr[mask]
+        # print('close points:', close_points.shape)
+        opacity = np.array(close_points['opacity'], dtype=np.float32)
+        mask = opacity > -1.5
+        filtered = close_points[mask]
+        plydata['vertex'].data = filtered
+        if save_pc:
+            plydata.write(str(path).split('.ply')[0] + '_FILTERED.ply')
 
-def save_gaussian_ply(gaussians, visualization_dump, example, save_path):
+        np.save(str(path).split('.ply')[0] + '_grid.npy', pointcloud_to_occupancy_grid(points=filtered))
+
+def save_gaussian_ply(gaussians, visualization_dump, example, save_path, save_pc, process_pc):
 
     v, _, h, w = example["context"]["image"].shape[1:]
 
@@ -112,6 +192,8 @@ def save_gaussian_ply(gaussians, visualization_dump, example, save_path):
         trim(gaussians.harmonics)[0],
         trim(gaussians.opacities)[0],
         save_path,
+        save_pc,
+        process_pc,
     )
 
 

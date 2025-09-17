@@ -80,6 +80,7 @@ test:
   save_depth_npy: false
   save_depth_concat_img: false
   save_gaussian: false
+  process_pc: false
   render_chunk_size: 10
   stablize_camera: false
   stab_camera_kernel: 50
