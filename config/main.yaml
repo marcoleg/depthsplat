@@ -85,6 +85,13 @@ test:
   stablize_camera: false
   stab_camera_kernel: 50
 
+outlier: # Outlier removal settings for point clouds / preprocessing.
+  outlier_method: "radi"         # options: "stat", "radi", "None"
+  radius: 0.05                   # radius (meters) for radius-based outlier removal
+  min_neighbors: 10              # minimum neighbors required (radius-based)
+  nb_neighbors: 16               # number of neighbors for statistical method
+  std_ratio: 1.0                 # std ratio for statistical method
+
 seed: 111123
 
 trainer:

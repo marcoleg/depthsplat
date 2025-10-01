@@ -41,6 +41,15 @@ class TrainerCfg:
 
 
 @dataclass
+class OutlierCfg:
+    outlier_method: str  # "stat" | "radius" | "none"
+    radius: float
+    min_neighbors: int
+    nb_neighbors: int
+    std_ratio: float
+
+
+@dataclass
 class RootCfg:
     wandb: dict
     mode: Literal["train", "test"]
@@ -55,6 +64,7 @@ class RootCfg:
     train: TrainCfg
     seed: int
     use_plugins: bool
+    outlier: OutlierCfg
 
 
 TYPE_HOOKS = {
@@ -72,7 +82,7 @@ def load_typed_config(
 ) -> T:
     return from_dict(
         data_class,
-        OmegaConf.to_container(cfg),
+        OmegaConf.to_container(cfg), # type: ignore
         config=Config(type_hooks={**TYPE_HOOKS, **extra_type_hooks}),
     )
 

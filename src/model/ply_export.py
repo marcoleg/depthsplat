@@ -7,6 +7,9 @@ from jaxtyping import Float
 from plyfile import PlyData, PlyElement
 from scipy.spatial.transform import Rotation as R
 from torch import Tensor
+import open3d as o3d
+import time, warnings
+from ..global_cfg import get_cfg
 
 
 def construct_list_of_attributes(num_rest: int) -> list[str]:
@@ -67,9 +70,8 @@ def pointcloud_to_occupancy_grid(points, grid_size=0.1, width=8, height=8, z_thr
     # plt.title("Occupancy Grid")
     # plt.xlabel("X")
     # plt.ylabel("Y")
-    # plt.scatter(y_points, x_points)
+    # # plt.scatter(y_points, x_points)
     # plt.savefig('/root/incremental_splat/ros_ws/src/incremental_splat/src/occupancy_grid.png')
-
 
     return grid
 
@@ -85,16 +87,48 @@ def export_ply(
     process_pc: bool,
 ):
 
+    try:
+        cfg = get_cfg()
+        out_cfg = getattr(cfg, "outlier", None)
+    except Exception as e:
+        warnings.warn(f"Errore nel caricamento config: {e}")
+        out_cfg = None
+
+
+    if out_cfg is not None:
+        outlier_method = getattr(out_cfg, "outlier_method")
+        radius = getattr(out_cfg, "radius")
+        min_neighbors = getattr(out_cfg, "min_neighbors")
+        nb_neighbors = getattr(out_cfg, "nb_neighbors")
+        std_ratio = getattr(out_cfg, "std_ratio")
+
+
+    def _mask_radius_xyz(xyz: np.ndarray, radius, min_neighbors) -> np.ndarray:
+        """True for inliers >= min_neighbors within radius"""
+        pcd = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(xyz.astype(np.float64)))
+        _, idx_inliers = pcd.remove_radius_outlier(nb_points=min_neighbors, radius=radius)
+        mask = np.zeros(len(xyz), dtype=bool)
+        mask[np.asarray(idx_inliers, dtype=int)] = True
+        return mask
+
+    def _mask_stat_xyz(xyz: np.ndarray, nb_neighbors, std_ratio) -> np.ndarray:
+        """True for inliers with the closest nb_neighbors"""
+        pcd = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(xyz.astype(np.float64)))
+        _, idx_inliers = pcd.remove_statistical_outlier(nb_neighbors=nb_neighbors, std_ratio=std_ratio)
+        mask = np.zeros(len(xyz), dtype=bool)
+        mask[np.asarray(idx_inliers, dtype=int)] = True
+        return mask
+
     view_rotation = extrinsics[:3, :3].inverse()
     # Apply the rotation to the means (Gaussian positions).
     means = einsum(view_rotation, means, "i j, ... j -> ... i")
 
     # Apply the rotation to the Gaussian rotations.
     rotations = R.from_quat(rotations.detach().cpu().numpy()).as_matrix()
-    rotations = view_rotation.detach().cpu().numpy() @ rotations
+    rotations = view_rotation.detach().cpu().numpy() @ rotations # type: ignore
     rotations = R.from_matrix(rotations).as_quat()
     x, y, z, w = rearrange(rotations, "g xyzw -> xyzw g")
-    rotations = np.stack((w, x, y, z), axis=-1)
+    rotations = np.stack((w, x, y, z), axis=-1) # type: ignore
 
     # Since our axes are swizzled for the spherical harmonics, we only export the DC band
     harmonics_view_invariant = harmonics[..., 0]
@@ -113,30 +147,33 @@ def export_ply(
     elements[:] = list(map(tuple, attributes))
     path.parent.mkdir(exist_ok=True, parents=True)
     plydata = PlyData([PlyElement.describe(elements, "vertex")])
-    # if save_pc:
-    #     plydata.write(path)
+
     if process_pc:
+        t0 = time.time()
         v = plydata['vertex'].data
         arr = np.array(v)
-        # print('v original shape:', v.shape, '\nx: {} ; {}\ny: {} ; {}\nz: {} {}'.format(arr['x'].min(),
-        #                                                                               arr['x'].max(),
-        #                                                                               arr['y'].min(),
-        #                                                                               arr['y'].max(),
-        #                                                                               arr['z'].min(),
-        #                                                                               arr['z'].max()))
         mask = (
                 (arr['x'] <= 20.0) &
                 (arr['x'] >= -20.0) &
                 (arr['y'] <= 5.0) &
                 (arr['y'] >= -5.0) &
                 (arr['z'] <= 25.0) &
-                (arr['z'] >= -25.0)
-        )
+                (arr['z'] >= -25.0))
         close_points = arr[mask]
-        # print('close points:', close_points.shape)
         opacity = np.array(close_points['opacity'], dtype=np.float32)
         mask = opacity > -1.5
         filtered = close_points[mask]
+
+        if outlier_method in ("radi", "stat"):
+            xyz = np.vstack([filtered['x'], filtered['y'], filtered['z']]).T.astype(np.float64)
+            if outlier_method == "radi":
+                mask_o3d = _mask_radius_xyz(xyz, radius=radius, min_neighbors=min_neighbors)
+            else:
+                mask_o3d = _mask_stat_xyz(xyz, nb_neighbors=nb_neighbors, std_ratio=std_ratio)
+            filtered = filtered[mask_o3d]
+        print(f"[export_ply] kept {len(filtered)} / {len(arr)} points ({len(filtered) / len(arr):.1%}) | "
+              f"{round(time.time() - t0, 3)}s | method: {outlier_method}")
+
         plydata['vertex'].data = filtered
         if save_pc:
             plydata.write(str(path).split('.ply')[0] + '_FILTERED.ply')
