@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Protocol, runtime_checkable
+from typing import Any, Optional, Protocol, runtime_checkable
 
 import moviepy.editor as mpy
 import torch
@@ -63,6 +63,7 @@ class TestCfg:
     output_path: Path
     compute_scores: bool
     save_image: bool
+    compute_image: bool
     save_video: bool
     eval_time_skip_steps: int
     save_gt_image: bool
@@ -157,6 +158,8 @@ class ModelWrapper(LightningModule):
         if self.test_cfg.compute_scores:
             self.test_step_outputs = {}
             self.time_skip_steps_dict = {"encoder": 0, "decoder": 0}
+
+        self.latest_result: dict[str, Any] | None = None
 
     def training_step(self, batch, batch_idx):
         batch: BatchedExample = self.data_shim(batch)
@@ -402,12 +405,20 @@ class ModelWrapper(LightningModule):
                     depth_gt = batch["context"]["depth"]
                 gaussians = gaussians["gaussians"]
 
+        occupancy_grid = None
+
         # save gaussians
         if self.test_cfg.save_gaussian or self.test_cfg.process_pc:
             scene = batch["scene"][0]
             save_path = Path(get_cfg()['output_dir']) / 'gaussians' / (scene + '.ply')
-            save_gaussian_ply(gaussians, visualization_dump, batch, save_path,
-                              save_pc=self.test_cfg.save_gaussian, process_pc=self.test_cfg.process_pc)
+            occupancy_grid = save_gaussian_ply(
+                gaussians,
+                visualization_dump,
+                batch,
+                save_path,
+                save_pc=self.test_cfg.save_gaussian,
+                process_pc=self.test_cfg.process_pc,
+            )
 
         if not self.train_cfg.forward_depth_only:
             with self.benchmarker.time("decoder", num_calls=v):
@@ -539,14 +550,22 @@ class ModelWrapper(LightningModule):
         images_prob = output.color[0]
         rgb_gt = batch["target"]["image"][0]
 
-        # Save images.
-        if self.test_cfg.save_image:
+        rendered_images: list[tuple[Any, np.ndarray]] = []
+        context_indices = []
+        target_indices = []
+
+        should_store_images = bool(self.test_cfg.compute_image)
+        should_save_images = self.test_cfg.save_image
+
+        # Save images / collect for downstream use.
+        if should_save_images or should_store_images:
             if self.test_cfg.save_gt_image:
                 for index, color, gt in zip(
                     batch["target"]["index"][0], images_prob, rgb_gt
                 ):
-                    save_image(color, path / "images" / scene / f"color/{index:0>6}.png")
-                    save_image(gt, path / "images" / scene / f"color/{index:0>6}_gt.png")
+                    if should_save_images:
+                        save_image(color, path / "images" / scene / f"color/{index:0>6}.png")
+                        save_image(gt, path / "images" / scene / f"color/{index:0>6}_gt.png")
             else:
 
                 if self.context_indices:
@@ -561,10 +580,17 @@ class ModelWrapper(LightningModule):
 
                 dir_name = str(context_indices).replace(', ', '-').removeprefix('[').removesuffix(']')
                 for index, color in zip(target_indices, images_prob):
-                    if isinstance(index, str):  # "new_1"
-                        save_image(color, path / "images" / scene / f"{dir_name}/frame_{index}.png")
+                    if isinstance(index, torch.Tensor):
+                        index_value: Any = int(index.item())
                     else:
-                        save_image(color, path / "images" / scene / f"{dir_name}/frame_{index+1:0>5}.png")
+                        index_value = index
+                    if should_store_images:
+                        rendered_images.append((index_value, prep_image(color)))
+                    if should_save_images:
+                        if isinstance(index, str):  # "new_1"
+                            save_image(color, path / "images" / scene / f"{dir_name}/frame_{index}.png")
+                        else:
+                            save_image(color, path / "images" / scene / f"{dir_name}/frame_{index+1:0>5}.png")
 
         # save video
         if self.test_cfg.save_video:
@@ -599,6 +625,16 @@ class ModelWrapper(LightningModule):
                 self.test_step_outputs[f"lpips"].append(
                     compute_lpips(rgb_gt, rgb).mean().item()
                 )
+
+        self.latest_result = {
+            "scene": scene,
+            "context_indices": context_indices,
+            "target_indices": [
+                int(t.item()) if isinstance(t, torch.Tensor) else t for t in target_indices
+            ],
+            "rendered_images": rendered_images if should_store_images else [],
+            "occupancy_grid": occupancy_grid,
+        }
 
     def on_test_end(self) -> None:
         out_dir = Path(self.test_cfg.output_path)

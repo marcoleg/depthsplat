@@ -39,6 +39,7 @@ def pointcloud_to_occupancy_grid(points, grid_size=0.1, width=8, height=8, z_thr
     Returns:
         np.ndarray: 2D occupancy grid (0 = free, 1 = occupied).
     """
+    t0 = time.time()
     # Grid dimensions
     cols = int(width / grid_size)
     rows = int(height / grid_size)
@@ -64,7 +65,8 @@ def pointcloud_to_occupancy_grid(points, grid_size=0.1, width=8, height=8, z_thr
 
     # Mark cells as occupied
     grid[row_idx, col_idx] = 1
-
+    print(f"[pointcloud_to_occupancy_grid] Generated grid with {np.sum(grid)} occupied cells"
+          f" | time: {round(time.time() - t0, 3)}s")
     # import matplotlib.pyplot as plt
     # plt.imshow(grid, cmap="gray_r", origin="lower")
     # plt.title("Occupancy Grid")
@@ -85,8 +87,9 @@ def export_ply(
     path: Path,
     save_pc: bool,
     process_pc: bool,
-):
+) -> np.ndarray | None:
 
+    t0 = time.time()
     try:
         cfg = get_cfg()
         out_cfg = getattr(cfg, "outlier", None)
@@ -148,6 +151,8 @@ def export_ply(
     path.parent.mkdir(exist_ok=True, parents=True)
     plydata = PlyData([PlyElement.describe(elements, "vertex")])
 
+    occupancy_grid: np.ndarray | None = None
+    print(f"[export_ply] Exporting {len(elements)} Gaussians | time: {round(time.time() - t0, 3)}s")
     if process_pc:
         t0 = time.time()
         v = plydata['vertex'].data
@@ -171,16 +176,21 @@ def export_ply(
             else:
                 mask_o3d = _mask_stat_xyz(xyz, nb_neighbors=nb_neighbors, std_ratio=std_ratio)
             filtered = filtered[mask_o3d]
-        print(f"[export_ply] kept {len(filtered)} / {len(arr)} points ({len(filtered) / len(arr):.1%}) | "
-              f"{round(time.time() - t0, 3)}s | method: {outlier_method}")
 
         plydata['vertex'].data = filtered
+
+        print(f"[export_ply] kept {len(filtered)} / {len(arr)} points ({len(filtered) / len(arr):.1%}) | time: "
+              f"{round(time.time() - t0, 3)}s | method: {outlier_method}")
         if save_pc:
             plydata.write(str(path).split('.ply')[0] + '_FILTERED.ply')
 
-        np.save(str(path).split('.ply')[0] + '_grid.npy', pointcloud_to_occupancy_grid(points=filtered))
+        occupancy_grid = pointcloud_to_occupancy_grid(points=filtered)
+        # np.save(str(path).split('.ply')[0] + '_grid.npy', occupancy_grid)
+
+    return occupancy_grid
 
 def save_gaussian_ply(gaussians, visualization_dump, example, save_path, save_pc, process_pc):
+    t0 = time.time()
 
     v, _, h, w = example["context"]["image"].shape[1:]
 
@@ -220,8 +230,9 @@ def save_gaussian_ply(gaussians, visualization_dump, example, save_path, save_pc
     world_rotations = torch.from_numpy(world_rotations).to(
         visualization_dump["scales"]
     )
-
-    export_ply(
+    print(f"[save_gaussian_ply] Preprocess data | time: {round(time.time() - t0, 3)}s")
+    t0 = time.time()
+    eply = export_ply(
         example["context"]["extrinsics"][0, 0],
         trim(gaussians.means)[0],
         trim(visualization_dump["scales"])[0],
@@ -232,5 +243,6 @@ def save_gaussian_ply(gaussians, visualization_dump, example, save_path, save_pc
         save_pc,
         process_pc,
     )
-
+    print(f"[save_gaussian_ply] Export .PLY | time: {round(time.time() - t0, 3)}s")
+    return eply
 

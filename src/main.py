@@ -71,6 +71,9 @@ def train(cfg_dict: DictConfig):
     cfg = load_typed_root_config(cfg_dict)
     set_cfg(cfg_dict)
 
+    if getattr(cfg.test, "compute_image", None) is None:
+        cfg.test.compute_image = cfg.test.save_image
+
     # Set up the output directory.
     if cfg_dict.output_dir is None:
         output_dir = Path(

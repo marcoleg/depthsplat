@@ -73,6 +73,7 @@ test:
   compute_scores: false
   eval_time_skip_steps: 0
   save_image: true
+  compute_image: true
   save_video: false
   save_gt_image: false
   save_input_images: false
@@ -86,7 +87,7 @@ test:
   stab_camera_kernel: 50
 
 outlier: # Outlier removal settings for point clouds / preprocessing.
-  outlier_method: "radi"         # options: "stat", "radi", "None"
+  outlier_method: "stat"         # options: "stat", "radi", "None"
   radius: 0.05                   # radius (meters) for radius-based outlier removal
   min_neighbors: 10              # minimum neighbors required (radius-based)
   nb_neighbors: 16               # number of neighbors for statistical method

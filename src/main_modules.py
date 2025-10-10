@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import warnings
 import copy
-from typing import Optional
+from typing import Any, Optional
 
 import hydra
 import torch
@@ -79,6 +79,9 @@ def create_depthsplat_session(cfg_dict: DictConfig) -> DepthSplatSession:
 
     cfg = load_typed_root_config(cfg_dict)
     set_cfg(cfg_dict)
+
+    if getattr(cfg.test, "compute_image", None) is None:
+        cfg.test.compute_image = cfg.test.save_image
 
     # Set up the output directory.
     if cfg_dict.output_dir is None:
@@ -281,13 +284,17 @@ def run_training(session: DepthSplatSession) -> None:
         datamodule=session.data_module,
         ckpt_path=session.checkpoint_path,
     )
-def run_inference(session: DepthSplatSession) -> None:
-    load_pretrained_weights(session, stage="test")
+def run_inference(session: DepthSplatSession, *, load_weights: bool = True) -> dict[str, Any] | None:
+    if load_weights:
+        load_pretrained_weights(session, stage="test")
+
+    session.model_wrapper.latest_result = None
     session.trainer.test(
         session.model_wrapper,
         datamodule=session.data_module,
         ckpt_path=session.checkpoint_path,
     )
+    return session.model_wrapper.latest_result
 @hydra.main(
     version_base=None,
     config_path="../config",
