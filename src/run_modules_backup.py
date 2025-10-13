@@ -5,8 +5,6 @@ from typing import Any
 
 import matplotlib.pyplot as plt
 import numpy as np
-import json, sys, subprocess
-from multiprocessing import shared_memory
 
 from hydra import compose, initialize  # direttamente da Hydra
 
@@ -16,71 +14,6 @@ from src.main_modules import (
     run_inference,
 )
 
-
-def _to_shared(arr: np.ndarray):
-    shm = shared_memory.SharedMemory(create=True, size=arr.nbytes)
-    view = np.ndarray(arr.shape, dtype=arr.dtype, buffer=shm.buf)
-    view[...] = arr  # copy
-    return {
-        "name": shm.name,
-        "shape": arr.shape,
-        "dtype": str(arr.dtype),
-        "nbytes": arr.nbytes,
-    }, shm  # return meta + handle to close/unlink later
-
-def _prep_payload_shared(occupancy_grid, rendered_images):
-    """
-    rendered_images è una lista di (idx, image_ndarray).
-    Impacchettiamo le immagini in un unico array (N,H,W,C) e passiamo gli indici a parte.
-    """
-    metas = {}
-    shms = []
-
-    # Occupancy grid (opzionale)
-    if occupancy_grid is not None:
-        if not isinstance(occupancy_grid, np.ndarray):
-            occupancy_grid = np.asarray(occupancy_grid)
-        og_meta, og_shm = _to_shared(occupancy_grid)
-        metas["occupancy_grid"] = og_meta
-        shms.append(og_shm)
-    else:
-        metas["occupancy_grid"] = None
-
-    # Rendered images (lista)
-    indices = []
-    imgs = []
-    for idx, img in (rendered_images or []):
-        indices.append(int(idx))
-        if not isinstance(img, np.ndarray):
-            img = np.asarray(img)
-        imgs.append(img)
-
-    if imgs:
-        # Verifica omogeneità e stack
-        first_shape = imgs[0].shape
-        first_dtype = imgs[0].dtype
-        if not all(im.shape == first_shape for im in imgs):
-            raise ValueError("Tutte le rendered_images devono avere la stessa shape per lo stack in shared memory.")
-        if not all(im.dtype == first_dtype for im in imgs):
-            imgs = [im.astype(first_dtype) for im in imgs]
-        img_block = np.stack(imgs, axis=0)  # (N,H,W[,C])
-        img_meta, img_shm = _to_shared(img_block)
-        metas["rendered_images"] = img_meta
-        metas["rendered_indices"] = indices
-        shms.append(img_shm)
-    else:
-        metas["rendered_images"] = None
-        metas["rendered_indices"] = []
-
-    return metas, shms
-
-def launch_consumer_different_interp(python_exe: str, consumer_script: str, meta: dict) -> int:
-    """
-    Avvia il consumer in un interprete diverso, passando il meta JSON via argv.
-    """
-    args = [python_exe, consumer_script, json.dumps(meta)]
-    proc = subprocess.run(args, text=True)
-    return proc.returncode
 
 def run_depthsplat_pipeline() -> dict[str, Any]:
     scale_factor = 1
@@ -93,11 +26,10 @@ def run_depthsplat_pipeline() -> dict[str, Any]:
         cfg = compose(config_name="main", overrides=["mode=test", "+experiment=dl3dv",
                                                      "dataset/view_sampler=evaluation",
                                                      "checkpointing.pretrained_model=pretrained/depthsplat-gs-base-dl3dv-256x448-randview2-6-02c7b19d.pth",
-                                                     "dataset.roots=[/root/incremental_splat/temp/output]",
+                                                     "dataset.roots=[/home/isarlab/PycharmProjects/incremental_splat/temp/output]",
                                                      "dataset.image_shape=" + str(image_shape),
-                                                     "data_loader.test.num_workers=0",
                                                      "dataset.ori_image_shape=" + str(ori_image_shape),
-                                                     "dataset.view_sampler.index_path=/root/incremental_splat/temp/dl3dv.json",
+                                                     "dataset.view_sampler.index_path=/home/isarlab/PycharmProjects/incremental_splat/temp/dl3dv.json",
                                                      "model.encoder.num_scales=2",
                                                      "model.encoder.upsample_factor=4",
                                                      "model.encoder.lowest_feature_resolution=8",
@@ -107,7 +39,7 @@ def run_depthsplat_pipeline() -> dict[str, Any]:
                                                      "test.compute_scores=false",
                                                      "test.save_image=false",
                                                      "test.compute_image=true",
-                                                     "output_dir=/root/incremental_splat/temp/output/data",
+                                                     "output_dir=/home/isarlab/PycharmProjects/incremental_splat/temp/output/data",
                                                      "test.save_depth=false",
                                                      "test.process_pc=true",
                                                      "test.save_gaussian=true",
@@ -151,29 +83,6 @@ if __name__ == "__main__":
     print("Timings (s):")
     for label, value in results["timings"].items():
         print(f"  {label}: {value:.3f}")
-    
-    print("occupancy shape/dtype:", occupancy.shape, occupancy.dtype)
-    print("rendered_images shape/dtype:", rendered_images[0][1].shape, rendered_images[0][1].dtype)
-    meta, shm_handles = _prep_payload_shared(occupancy, rendered_images)
-    # Lancia interprete/ambiente diverso (esempio: Python di un'altra conda/env)
-    # Sostituisci con il binario che vuoi usare:
-    other_python = "/usr/bin/python3"
-    consumer_script = "/root/incremental_splat/ros_ws/src/depthsplat_ros/src/consumer.py"
-
-    try:
-        rc = launch_consumer_different_interp(other_python, consumer_script, meta)
-        print("Consumer return code:", rc)
-    finally:
-        # Chiudi e rilascia i segmenti condivisi
-        for shm in shm_handles:
-            try:
-                shm.close()
-            except Exception:
-                pass
-            try:
-                shm.unlink()
-            except Exception:
-                pass
 
     plot = False
     if plot:
@@ -196,6 +105,6 @@ if __name__ == "__main__":
                 ax.axis("off")
 
             plt.tight_layout()
-            plt.savefig("rendered_images_old.png")
+            plt.show()
         else:
             print("No rendered images available for plotting.")
