@@ -116,8 +116,8 @@ def load_metadata(example_path: Path) -> Metadata:
         )
         camera = [saved_fx, saved_fy, saved_cx, saved_cy, 0.0, 0.0]
         # transform_matrix is in blender c2w, while we need to store opencv w2c matrix here
-        opencv_c2w = np.array(frame["transform_matrix"]) @ blender2opencv
-        # opencv_c2w = np.array(frame["transform_matrix"]) @ ros2blender.T @ blender2opencv
+        # opencv_c2w = np.array(frame["transform_matrix"]) @ blender2opencv
+        opencv_c2w = np.array(frame["transform_matrix"]) @ ros2blender.T @ blender2opencv
 
         opencv_c2ws.append(opencv_c2w)
         camera.extend(np.linalg.inv(opencv_c2w)[:3].flatten().tolist())
@@ -202,7 +202,7 @@ if __name__ == "__main__":
         if "images_8" in args.img_subdir:
             target_shape = (270, 480)  # (h, w)
         elif "images_4" in args.img_subdir:
-            target_shape = (540, 960) # (360, 640) # (540, 960)
+            target_shape = (480, 640) # airsim # (360, 640) zed # (540, 960) dl3dv
         else:
             raise ValueError
 

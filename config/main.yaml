@@ -87,7 +87,7 @@ test:
   stab_camera_kernel: 50
 
 outlier: # Outlier removal settings for point clouds / preprocessing.
-  outlier_method: "stat"         # options: "stat", "radi", "None"
+  outlier_method: "None"         # options: "stat", "radi", "None"
   radius: 0.05                   # radius (meters) for radius-based outlier removal
   min_neighbors: 10              # minimum neighbors required (radius-based)
   nb_neighbors: 16               # number of neighbors for statistical method

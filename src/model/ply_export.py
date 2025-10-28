@@ -185,7 +185,7 @@ def export_ply(
             plydata.write(str(path).split('.ply')[0] + '_FILTERED.ply')
 
         occupancy_grid = pointcloud_to_occupancy_grid(points=filtered)
-        # np.save(str(path).split('.ply')[0] + '_grid.npy', occupancy_grid)
+        np.save(str(path).split('.ply')[0] + '_grid.npy', occupancy_grid)
 
     return occupancy_grid
 
