@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
+import argparse
 import threading
 import time
 from typing import Any
@@ -88,7 +90,7 @@ class CommandServer:
         self.port = port
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
-        self.output_dict = {'flag': False}
+        self.output_dict = {'flag': False, 'seq_name': None, 'context': None, 'target': None}
 
     def start(self) -> None:
         if self._thread is not None:
@@ -135,8 +137,11 @@ class CommandServer:
                         print(f"[CommandServer] Bad packet from {addr}: {exc} :: {line!r}")
                         continue
                     flag = payload.get("trigger")
-                    print(f"[CommandServer] trigger={flag}")
-                    self.output_dict = {'flag': flag}
+                    seq_name = payload.get("seq_name")
+                    context = payload.get("context")
+                    target = payload.get("target")
+                    print(f"[CommandServer] trigger={flag}, seq_name={seq_name}, context={context}, target={target}")
+                    self.output_dict = {'flag': flag, 'seq_name': seq_name, 'context': context, 'target': target}
         print(f"[CommandServer] Client disconnected: {addr}")
 
 def launch_consumer_different_interp(python_exe: str, consumer_script: str, meta: dict) -> int:
@@ -202,8 +207,53 @@ def prepare_ds_inputs():
     ]
     subprocess.run(command, check=True)
 
+def run_difix(seq_name, context, target, n, context_dir_name=None):
+    print('\n############# Running Difix')
+    if context_dir_name is None:
+        str_context = str(context)
+        context_dir_name = str_context.replace(', ', '-').replace('[', '').replace(']', '')
+
+    ref_frame_name = f'frame_{context[0]:0>5}.png'
+    frame_name = f'frame_new_{n}.png'
+
+    assert len(target) == 1, "Target should contain exactly one frame index."  # TODO: generalizza per len(target) > 1
+    shutil.move(os.path.join('/root/incremental_splat/ros_ws/src/incremental_splat/src/temp', 'output', 'data', 'images', seq_name, context_dir_name, f'frame_{target[0]+1:0>5}.png'),
+                os.path.join('/root/incremental_splat/ros_ws/src/incremental_splat/src/temp', 'output', 'data', 'images', seq_name, context_dir_name, frame_name))
+
+    python_exec = "/root/miniconda3/envs/depthsplat/bin/python"
+
+    command = [
+        python_exec,
+        "/root/Difix3D/src/inference_difix.py",
+        "--input_image", os.path.join('/root/incremental_splat/ros_ws/src/incremental_splat/src/temp', 'output', 'data', 'images', seq_name, context_dir_name, frame_name),
+        "--height", "640",  # 360 -> 320
+        "--width", "480",   # 640 -> 576
+        "--prompt", "",
+        "--model_path", "/root/Difix3D/outputs/difix/train/checkpoints/model_v3.pkl",
+        "--output_dir", os.path.join('/root/incremental_splat/ros_ws/src/incremental_splat/src/temp', 'input', seq_name, 'gaussian_splat', 'images_4'),
+        "--ref_image", os.path.join('/root/incremental_splat/ros_ws/src/incremental_splat/src/temp', 'input', seq_name, 'gaussian_splat', 'images_4', ref_frame_name)
+    ]
+
+    subprocess.run(command, check=True)
+
+    _update_transforms_json(seq_name, n)
+
+def _update_transforms_json(seq_name, n):
+    trans_path = os.path.join("/root/incremental_splat/ros_ws/src/incremental_splat/src/temp", "input", seq_name, "gaussian_splat", "transforms.json")
+    transforms = json.load(open(trans_path, 'r'))
+    new_tf = [{
+        "file_path": f"images/frame_new_{n}.png",
+        "transform_matrix": [[0.0, 1.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0], [-0.0, -0.0, -1.0, -0.0]]  # TODO: aggiorna con posa corretta
+    }]
+    transforms['frames'] += new_tf
+    json.dump(transforms, open(trans_path, 'w'))  # type: ignore[arg-type]
+
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--N", type=int, help="Times that we take (last+K)-th frame", default=0)
+    args = parser.parse_args()
+
     session, config_time, session_time, weights_time, t_start = run_depthsplat_pipeline()
     inference_time = time.time()
     cmd_host = os.environ.get("DEPTHSPLAT_CMD_HOST", "127.0.0.1")
@@ -221,6 +271,16 @@ if __name__ == "__main__":
                 print("Received trigger:", command_server.output_dict)
                 prepare_ds_inputs()
                 inference_result = run_inference(session, load_weights=False) or {}
+
+                if args.N > 0:
+                    for n in range (args.N):
+                        run_difix(seq_name=command_server.output_dict.get('seq_name'), 
+                                  context=command_server.output_dict.get('context'),
+                                  target=command_server.output_dict.get('target'),
+                                  n=n)
+                        inference_result = run_inference(session, load_weights=False) or {}
+                    assert False, "now u have to send occupancy grid and rendered images via shared memory"
+
                 occupancy_grid = inference_result.get("occupancy_grid")
                 rendered_images = inference_result.get("rendered_images", [])
                 results = {
