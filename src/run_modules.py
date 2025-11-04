@@ -14,6 +14,7 @@ from typing import Any
 import matplotlib.pyplot as plt
 import numpy as np
 from multiprocessing import shared_memory
+from scipy.spatial.transform import Rotation as R
 
 from hydra import compose, initialize  # direttamente da Hydra
 
@@ -90,7 +91,7 @@ class CommandServer:
         self.port = port
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
-        self.output_dict = {'flag': False, 'seq_name': None, 'context': None, 'target': None}
+        self.output_dict = {'flag': False, 'seq_name': None, 'context': None, 'target': None, 'last_pose': None}
 
     def start(self) -> None:
         if self._thread is not None:
@@ -140,8 +141,9 @@ class CommandServer:
                     seq_name = payload.get("seq_name")
                     context = payload.get("context")
                     target = payload.get("target")
+                    last_pose = payload.get("last_pose")
                     print(f"[CommandServer] trigger={flag}, seq_name={seq_name}, context={context}, target={target}")
-                    self.output_dict = {'flag': flag, 'seq_name': seq_name, 'context': context, 'target': target}
+                    self.output_dict = {'flag': flag, 'seq_name': seq_name, 'context': context, 'target': target, 'last_pose': last_pose}
         print(f"[CommandServer] Client disconnected: {addr}")
 
 def launch_consumer_different_interp(python_exe: str, consumer_script: str, meta: dict) -> int:
@@ -183,12 +185,25 @@ def run_depthsplat_pipeline() -> object:
                                                      "test.save_gaussian=true",
                                                      ])
     config_time = time.time()
+    cfg.dataset.target_names = ["new_0"]
 
     session = create_depthsplat_session(cfg)
     session_time = time.time()
 
     load_pretrained_weights(session, stage="test")
     weights_time = time.time()
+
+    # print('prima')
+    # print(session.cfg.dataset)
+    # print(session.cfg.dataset.target_names)
+    # print('\n\n')
+    # index = 1
+    # session.cfg.dataset.target_names = ["new_%d" % index]
+    # print('dopo')
+    # print(session.cfg.dataset)
+    # print(session.cfg.dataset.target_names)
+    # print('\n\n')
+
     return session, config_time, session_time, weights_time, t_start
 
 def prepare_ds_inputs():
@@ -207,25 +222,17 @@ def prepare_ds_inputs():
     ]
     subprocess.run(command, check=True)
 
-def run_difix(seq_name, context, target, n, context_dir_name=None):
+def run_difix(seq_name, context, new_frame_name, context_dir_name=None):
     print('\n############# Running Difix')
-    if context_dir_name is None:
-        str_context = str(context)
-        context_dir_name = str_context.replace(', ', '-').replace('[', '').replace(']', '')
 
     ref_frame_name = f'frame_{context[0]:0>5}.png'
-    frame_name = f'frame_new_{n}.png'
-
-    assert len(target) == 1, "Target should contain exactly one frame index."  # TODO: generalizza per len(target) > 1
-    shutil.move(os.path.join('/root/incremental_splat/ros_ws/src/incremental_splat/src/temp', 'output', 'data', 'images', seq_name, context_dir_name, f'frame_{target[0]+1:0>5}.png'),
-                os.path.join('/root/incremental_splat/ros_ws/src/incremental_splat/src/temp', 'output', 'data', 'images', seq_name, context_dir_name, frame_name))
 
     python_exec = "/root/miniconda3/envs/depthsplat/bin/python"
 
     command = [
         python_exec,
         "/root/Difix3D/src/inference_difix.py",
-        "--input_image", os.path.join('/root/incremental_splat/ros_ws/src/incremental_splat/src/temp', 'output', 'data', 'images', seq_name, context_dir_name, frame_name),
+        "--input_image", os.path.join('/root/incremental_splat/ros_ws/src/incremental_splat/src/temp', 'output', 'data', 'images', seq_name, context_dir_name, new_frame_name),
         "--height", "640",  # 360 -> 320
         "--width", "480",   # 640 -> 576
         "--prompt", "",
@@ -236,23 +243,53 @@ def run_difix(seq_name, context, target, n, context_dir_name=None):
 
     subprocess.run(command, check=True)
 
-    _update_transforms_json(seq_name, n)
-
-def _update_transforms_json(seq_name, n):
+def _update_transforms_json(seq_name, new_frame_name, new_pose):
     trans_path = os.path.join("/root/incremental_splat/ros_ws/src/incremental_splat/src/temp", "input", seq_name, "gaussian_splat", "transforms.json")
     transforms = json.load(open(trans_path, 'r'))
     new_tf = [{
-        "file_path": f"images/frame_new_{n}.png",
-        "transform_matrix": [[0.0, 1.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0], [-0.0, -0.0, -1.0, -0.0]]  # TODO: aggiorna con posa corretta
+        "file_path": f"images/{new_frame_name}",
+        "transform_matrix": new_pose
     }]
     transforms['frames'] += new_tf
     json.dump(transforms, open(trans_path, 'w'))  # type: ignore[arg-type]
+
+def prepare_ds_newframes(session, command_server, T_rel, index, last_pose=None, context=None):
+
+    session.cfg.dataset.target_names = ["new_%d" % index]
+
+    if context:
+        session.cfg.dataset.context_indices = context
+
+    if last_pose is None:
+        last_pose = command_server.output_dict.get('last_pose')
+
+    new_pose = last_pose @ T_rel
+    session.cfg.dataset.target_poses = [new_pose.tolist()]
+    _update_transforms_json(command_server.output_dict.get('seq_name'), f'frame_new_{index}.png', new_pose=new_pose.tolist())
+    last_pose = new_pose
+    str_context = str(command_server.output_dict.get('context'))
+    context_dir_name = str_context.replace(', ', '-').replace('[', '').replace(']', '')
+    shutil.copy(os.path.join('/root/incremental_splat/ros_ws/src/incremental_splat/src/temp', 'input', 
+                            command_server.output_dict.get('seq_name'), 'gaussian_splat', 'images_4',
+                            f'frame_{command_server.output_dict.get("context")[0]:0>5}.png'),
+                        os.path.join('/root/incremental_splat/ros_ws/src/incremental_splat/src/temp', 'input',
+                            command_server.output_dict.get('seq_name'), 'gaussian_splat', 'images_4', f'frame_new_{index}.png'))
+    
+    return last_pose, context_dir_name
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--N", type=int, help="Times that we take (last+K)-th frame", default=0)
+    parser.add_argument("--target_rpy", type=float, help="Required Roll, Pitch, Yaw", nargs="+", default=[0, 0, 0])
+    parser.add_argument("--target_xyz", type=float, help="Required x, y, z", nargs="+", default=[0.0, 0, 0.0])
     args = parser.parse_args()
+
+    # Compute absolute transformation matrix of new frame
+    rot_mat = R.from_euler('xyz', args.target_rpy, degrees=True).as_matrix().tolist()
+    T_rel = np.array([rot_mat[0]+[args.target_xyz[0]], rot_mat[1]+[args.target_xyz[1]], rot_mat[2]+[args.target_xyz[2]], [0.0, 0.0, 0.0, 1.0]])
+    ros2blender = np.array([[0, -1, 0, 0], [0, 0, 1, 0], [-1, 0, 0, 0], [0, 0, 0, 1]])
+    blender2opencv = np.array([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
 
     session, config_time, session_time, weights_time, t_start = run_depthsplat_pipeline()
     inference_time = time.time()
@@ -266,20 +303,35 @@ if __name__ == "__main__":
     try:
         print("[CommandServer] Listening for incoming triggers (Ctrl+C to stop).")
         while True:
-            # print("[", time.time(), "]Current flag status:", command_server.output_dict['flag'])
+
             if command_server.output_dict['flag']:
-                print("Received trigger:", command_server.output_dict)
+                print(command_server.output_dict.get('context'))
+                print("Received trigger:", command_server.output_dict['flag'], '\nSeq_name:', command_server.output_dict['seq_name'],)
+                
+                seq_name = command_server.output_dict.get('seq_name')
+                context = command_server.output_dict.get('context')
+                target = command_server.output_dict.get('target')
+
+                last_pose, context_dir_name = prepare_ds_newframes(session, command_server, T_rel, index=0) 
                 prepare_ds_inputs()
+
                 inference_result = run_inference(session, load_weights=False) or {}
 
                 if args.N > 0:
                     for n in range (args.N):
-                        run_difix(seq_name=command_server.output_dict.get('seq_name'), 
-                                  context=command_server.output_dict.get('context'),
-                                  target=command_server.output_dict.get('target'),
-                                  n=n)
+                        run_difix(seq_name=seq_name, 
+                                  context=context,
+                                  new_frame_name=f'frame_new_{n}.png',
+                                  context_dir_name=context_dir_name)
+                        if n == args.N - 1:
+                            session.cfg.test.save_gaussian = True
+                        else:
+                            session.cfg.test.save_gaussian = False
+                        
+                        context.append(target[0] + n)
+                        last_pose, context_dir_name = prepare_ds_newframes(session, command_server, T_rel, index=n+1, last_pose=last_pose, context=context)
+                        prepare_ds_inputs()
                         inference_result = run_inference(session, load_weights=False) or {}
-                    assert False, "now u have to send occupancy grid and rendered images via shared memory"
 
                 occupancy_grid = inference_result.get("occupancy_grid")
                 rendered_images = inference_result.get("rendered_images", [])

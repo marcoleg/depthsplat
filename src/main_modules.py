@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import warnings
 import copy
+from collections.abc import Sequence
 from typing import Any, Optional
 
 import hydra
@@ -10,7 +11,7 @@ import torch
 import wandb
 from colorama import Fore
 from jaxtyping import install_import_hook
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, ListConfig, OmegaConf
 from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import (
     LearningRateMonitor,
@@ -181,17 +182,52 @@ def create_depthsplat_session(cfg_dict: DictConfig) -> DepthSplatSession:
         global_rank=trainer.global_rank,
     )
 
-    if cfg_dict["dataset"]["target_poses"]:
-        target_poses = torch.tensor(cfg_dict["dataset"]["target_poses"])
-        model_wrapper.target_poses = target_poses
-        model_wrapper.context_indices = cfg_dict["dataset"]["context_indices"]
-        model_wrapper.target_names = cfg_dict["dataset"]["target_names"]
-        assert len(model_wrapper.target_poses) == len(model_wrapper.target_names)
+    dataset_cfg = cfg.dataset
 
-    if cfg_dict["dataset"]["context_indices"]:
-        model_wrapper.context_indices = cfg_dict["dataset"]["context_indices"]
-    if cfg_dict["dataset"]["target_names"]:
-        model_wrapper.target_names = cfg_dict["dataset"]["target_names"]
+    def _normalize_sequence(value: Any) -> list[Any]:
+        if value is None:
+            return []
+        if isinstance(value, ListConfig):
+            return list(value)
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+            return list(value)
+        return [value]
+
+    def _update_cfg_dict(field: str, value: Any) -> None:
+        try:
+            OmegaConf.update(cfg_dict, f"dataset.{field}", value, merge=False)
+        except Exception:
+            pass
+
+    def _set_context_indices(indices: Any) -> None:
+        indices_list = _normalize_sequence(indices)
+        model_wrapper.context_indices = indices_list
+        _update_cfg_dict("context_indices", indices_list)
+
+    def _set_target_names(names: Any) -> None:
+        names_list = _normalize_sequence(names)
+        model_wrapper.target_names = names_list
+        _update_cfg_dict("target_names", names_list)
+
+    def _set_target_poses(poses: Any) -> None:
+        poses_list = _normalize_sequence(poses)
+        _update_cfg_dict("target_poses", poses_list)
+        if poses_list:
+            model_wrapper.target_poses = torch.as_tensor(poses_list)
+            if model_wrapper.target_names and len(model_wrapper.target_poses) != len(model_wrapper.target_names):
+                raise ValueError(
+                    "The number of target poses must match the number of target names."
+                )
+        else:
+            model_wrapper.target_poses = None
+
+    dataset_cfg.register_observer("context_indices", _set_context_indices)
+    dataset_cfg.register_observer("target_names", _set_target_names)
+    dataset_cfg.register_observer("target_poses", _set_target_poses)
+
+    _set_context_indices(dataset_cfg.context_indices)
+    _set_target_names(dataset_cfg.target_names)
+    _set_target_poses(dataset_cfg.target_poses)
 
     if cfg.mode == "train":
         print("train:", len(data_module.train_dataloader()))
