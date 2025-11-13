@@ -89,6 +89,7 @@ class Example(Metadata):
 def load_metadata(example_path: Path) -> Metadata:
     blender2opencv = np.array([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
     ros2blender = np.array([[0, -1, 0, 0], [0, 0, 1, 0], [-1, 0, 0, 0], [0, 0, 0, 1]])
+    ned2opencv = np.array([[0, 1, 0, 0], [0, 0, 1, 0], [1, 0, 0, 0], [0, 0, 0, 1]])
 
     url = str(example_path).split("/")[-3]
     with open(example_path, "r") as f:
@@ -116,8 +117,11 @@ def load_metadata(example_path: Path) -> Metadata:
         )
         camera = [saved_fx, saved_fy, saved_cx, saved_cy, 0.0, 0.0]
         # transform_matrix is in blender c2w, while we need to store opencv w2c matrix here
-        # opencv_c2w = np.array(frame["transform_matrix"]) @ blender2opencv
-        opencv_c2w = np.array(frame["transform_matrix"]) @ ros2blender.T @ blender2opencv
+
+        # TODO: decide what dataset to use
+        # opencv_c2w = np.array(frame["transform_matrix"]) @ blender2opencv                     # DL3DV DATASET
+        # opencv_c2w = np.array(frame["transform_matrix"]) @ ros2blender.T @ blender2opencv     # REAL ZED DATA
+        opencv_c2w = np.array(frame["transform_matrix"]) @ ned2opencv.T                         # SIM AIRSIM DATA
 
         opencv_c2ws.append(opencv_c2w)
         camera.extend(np.linalg.inv(opencv_c2w)[:3].flatten().tolist())

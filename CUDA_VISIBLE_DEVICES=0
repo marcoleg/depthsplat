@@ -1,0 +1,6 @@
+[36mSaving outputs to /root/incremental_splat/ros_ws/src/incremental_splat/src/temp/output/data.[39m
+[2025-11-06 16:05:07,360][dinov2][INFO] - using MLP layer as FFN
+Setting up [LPIPS] perceptual loss: trunk [vgg], v[0.1], spatial [off]
+Loading model from: /root/miniconda3/envs/depthsplat/lib/python3.10/site-packages/lpips/weights/v0.1/vgg.pth
+[36mLoaded pretrained weights: pretrained/depthsplat-gs-base-dl3dv-256x448-randview2-6-02c7b19d.pth[39m
+Testing: |          | 0/? [00:00<?, ?it/s]Testing: |          | 0/? [00:00<?, ?it/s]

@@ -36,9 +36,8 @@ def _to_shared(arr: np.ndarray):
         "nbytes": arr.nbytes,
     }, shm  # return meta + handle to close/unlink later
 
-def _prep_payload_shared(occupancy_grid, rendered_images):
+def _prep_payload_shared(occupancy_grid):
     """
-    rendered_images è una lista di (idx, image_ndarray).
     Impacchettiamo le immagini in un unico array (N,H,W,C) e passiamo gli indici a parte.
     """
     metas = {}
@@ -53,32 +52,6 @@ def _prep_payload_shared(occupancy_grid, rendered_images):
         shms.append(og_shm)
     else:
         metas["occupancy_grid"] = None
-
-    # Rendered images (lista)
-    indices = []
-    imgs = []
-    for idx, img in (rendered_images or []):
-        indices.append(int(idx))
-        if not isinstance(img, np.ndarray):
-            img = np.asarray(img)
-        imgs.append(img)
-
-    if imgs:
-        # Verifica omogeneità e stack
-        first_shape = imgs[0].shape
-        first_dtype = imgs[0].dtype
-        if not all(im.shape == first_shape for im in imgs):
-            raise ValueError("Tutte le rendered_images devono avere la stessa shape per lo stack in shared memory.")
-        if not all(im.dtype == first_dtype for im in imgs):
-            imgs = [im.astype(first_dtype) for im in imgs]
-        img_block = np.stack(imgs, axis=0)  # (N,H,W[,C])
-        img_meta, img_shm = _to_shared(img_block)
-        metas["rendered_images"] = img_meta
-        metas["rendered_indices"] = indices
-        shms.append(img_shm)
-    else:
-        metas["rendered_images"] = None
-        metas["rendered_indices"] = []
 
     return metas, shms
 
@@ -165,6 +138,8 @@ def run_depthsplat_pipeline() -> object:
         cfg = compose(config_name="main", overrides=["mode=test", "+experiment=dl3dv",
                                                      "dataset/view_sampler=evaluation",
                                                      "checkpointing.pretrained_model=pretrained/depthsplat-gs-base-dl3dv-256x448-randview2-6-02c7b19d.pth",
+                                                     # "train.forward_depth_only=true",
+                                                     # "checkpointing.pretrained_depth=pretrained/depthsplat-depth-base-352x640-randview2-8-65a892c5.pth",
                                                      "dataset.roots=[/root/incremental_splat/ros_ws/src/incremental_splat/src/temp/output]",
                                                      "dataset.image_shape=" + str(image_shape),
                                                      "data_loader.test.num_workers=0",
@@ -192,17 +167,6 @@ def run_depthsplat_pipeline() -> object:
 
     load_pretrained_weights(session, stage="test")
     weights_time = time.time()
-
-    # print('prima')
-    # print(session.cfg.dataset)
-    # print(session.cfg.dataset.target_names)
-    # print('\n\n')
-    # index = 1
-    # session.cfg.dataset.target_names = ["new_%d" % index]
-    # print('dopo')
-    # print(session.cfg.dataset)
-    # print(session.cfg.dataset.target_names)
-    # print('\n\n')
 
     return session, config_time, session_time, weights_time, t_start
 
@@ -233,8 +197,8 @@ def run_difix(seq_name, context, new_frame_name, context_dir_name=None):
         python_exec,
         "/root/Difix3D/src/inference_difix.py",
         "--input_image", os.path.join('/root/incremental_splat/ros_ws/src/incremental_splat/src/temp', 'output', 'data', 'images', seq_name, context_dir_name, new_frame_name),
-        "--height", "640",  # 360 -> 320
-        "--width", "480",   # 640 -> 576
+        "--height", "480",  # 360 -> 320
+        "--width", "640",   # 640 -> 576
         "--prompt", "",
         "--model_path", "/root/Difix3D/outputs/difix/train/checkpoints/model_v3.pkl",
         "--output_dir", os.path.join('/root/incremental_splat/ros_ws/src/incremental_splat/src/temp', 'input', seq_name, 'gaussian_splat', 'images_4'),
@@ -263,8 +227,11 @@ def prepare_ds_newframes(session, command_server, T_rel, index, last_pose=None, 
     if last_pose is None:
         last_pose = command_server.output_dict.get('last_pose')
 
-    new_pose = last_pose @ T_rel
-    session.cfg.dataset.target_poses = [new_pose.tolist()]
+    new_pose = np.array(last_pose) @ T_rel  # ned reference system
+    ned2opencv = np.array([[0, 1, 0, 0], [0, 0, 1, 0], [1, 0, 0, 0], [0, 0, 0, 1]])
+    target_pose = new_pose @ ned2opencv.T  # opencv reference system
+    # target_pose = new_pose 
+    session.cfg.dataset.target_poses = [target_pose.tolist()]
     _update_transforms_json(command_server.output_dict.get('seq_name'), f'frame_new_{index}.png', new_pose=new_pose.tolist())
     last_pose = new_pose
     str_context = str(command_server.output_dict.get('context'))
@@ -274,22 +241,28 @@ def prepare_ds_newframes(session, command_server, T_rel, index, last_pose=None, 
                             f'frame_{command_server.output_dict.get("context")[0]:0>5}.png'),
                         os.path.join('/root/incremental_splat/ros_ws/src/incremental_splat/src/temp', 'input',
                             command_server.output_dict.get('seq_name'), 'gaussian_splat', 'images_4', f'frame_new_{index}.png'))
-    
+
+    if index > 0:
+        new_dl3dv_json = {command_server.output_dict.get('seq_name'): {
+            "context": command_server.output_dict.get('context'),
+            "target": [0]
+        }}
+        dl3dv_json_path = os.path.join("/root/incremental_splat/ros_ws/src/incremental_splat/src/temp", "dl3dv.json")
+        json.dump(new_dl3dv_json, open(dl3dv_json_path, 'w'))  # type: ignore[arg-type]
+
     return last_pose, context_dir_name
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--N", type=int, help="Times that we take (last+K)-th frame", default=0)
-    parser.add_argument("--target_rpy", type=float, help="Required Roll, Pitch, Yaw", nargs="+", default=[0, 0, 0])
-    parser.add_argument("--target_xyz", type=float, help="Required x, y, z", nargs="+", default=[0.0, 0, 0.0])
+    parser.add_argument("--target_rpy", type=float, help="Required Roll, Yaw, Pitch", nargs="+", default=[0, 0, 0])
+    parser.add_argument("--target_xyz", type=float, help="Required x (right), y (down), z (forward)", nargs="+", default=[0.0, 0, 0.0])
     args = parser.parse_args()
 
     # Compute absolute transformation matrix of new frame
     rot_mat = R.from_euler('xyz', args.target_rpy, degrees=True).as_matrix().tolist()
     T_rel = np.array([rot_mat[0]+[args.target_xyz[0]], rot_mat[1]+[args.target_xyz[1]], rot_mat[2]+[args.target_xyz[2]], [0.0, 0.0, 0.0, 1.0]])
-    ros2blender = np.array([[0, -1, 0, 0], [0, 0, 1, 0], [-1, 0, 0, 0], [0, 0, 0, 1]])
-    blender2opencv = np.array([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
 
     session, config_time, session_time, weights_time, t_start = run_depthsplat_pipeline()
     inference_time = time.time()
@@ -316,7 +289,8 @@ if __name__ == "__main__":
                 prepare_ds_inputs()
 
                 inference_result = run_inference(session, load_weights=False) or {}
-
+                shutil.move(os.path.join('/root/incremental_splat/ros_ws/src/incremental_splat/src/temp', 'output', 'data', 'gaussians', seq_name + '_FILTERED.ply'),
+                            os.path.join('/root/incremental_splat/ros_ws/src/incremental_splat/src/temp', 'output', 'data', 'gaussians', f'ORIG_{seq_name}_FILTERED.ply'))
                 if args.N > 0:
                     for n in range (args.N):
                         run_difix(seq_name=seq_name, 
@@ -334,10 +308,8 @@ if __name__ == "__main__":
                         inference_result = run_inference(session, load_weights=False) or {}
 
                 occupancy_grid = inference_result.get("occupancy_grid")
-                rendered_images = inference_result.get("rendered_images", [])
                 results = {
                     "occupancy_grid": occupancy_grid,
-                    "rendered_images": rendered_images,
                     "output_dir": session.output_dir,
                     "timings": {
                         "config": config_time - t_start,
@@ -349,42 +321,14 @@ if __name__ == "__main__":
 
                 occupancy = results["occupancy_grid"]
                 grid_shape = None if occupancy is None else occupancy.shape
-                rendered_images = results["rendered_images"]
-                first_rendered_shape = rendered_images[0][1].shape if rendered_images else None
                 print(f"Loaded occupancy grid shape: {grid_shape}")
-                print(f"Loaded rendered image shape: {first_rendered_shape}")
                 print("Timings (s):")
                 for label, value in results["timings"].items():
                     print(f"  {label}: {value:.3f}")
 
-                meta, shm_handles = _prep_payload_shared(occupancy, rendered_images)
+                meta, shm_handles = _prep_payload_shared(occupancy)
                 other_python = "/usr/bin/python3"
                 consumer_script = "/root/incremental_splat/ros_ws/src/depthsplat_ros/src/consumer.py"
-
-                plot = False
-                if plot:
-                    if rendered_images:
-                        num_images = len(rendered_images)
-                        cols = min(num_images, 4)
-                        rows = int(np.ceil(num_images / cols))
-                        fig2, axes2 = plt.subplots(rows, cols, figsize=(4 * cols, 4 * rows))
-                        if not isinstance(axes2, np.ndarray):
-                            axes_list = [axes2]
-                        else:
-                            axes_list = axes2.flatten()
-
-                        for ax, (idx, image) in zip(axes_list, rendered_images):
-                            ax.imshow(image)
-                            ax.set_title(f"Rendered {idx}")
-                            ax.axis("off")
-
-                        for ax in axes_list[len(rendered_images):]:
-                            ax.axis("off")
-
-                        plt.tight_layout()
-                        plt.show()
-                    else:
-                        print("No rendered images available for plotting.")
 
                 try:
                     rc = launch_consumer_different_interp(other_python, consumer_script, meta)
