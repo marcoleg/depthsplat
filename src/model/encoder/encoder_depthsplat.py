@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from typing import Literal, Optional, List
+from pathlib import Path
 
 import torch
 from einops import rearrange
@@ -16,6 +17,8 @@ from .visualization.encoder_visualizer_depthsplat_cfg import EncoderVisualizerDe
 
 import torchvision.transforms as T
 import torch.nn.functional as F
+import matplotlib.pyplot as plt
+import numpy as np
 
 from .unimatch.mv_unimatch import MultiViewUniMatch
 from .unimatch.dpt_head import DPTHead
@@ -174,6 +177,56 @@ class EncoderDepthSplat(Encoder[EncoderDepthSplatCfg]):
 
         # [B, V, H, W]
         depth = depth_preds[-1]
+
+        ''' """ Debug: save context depth images """
+        
+        with torch.no_grad():
+            rgb_batch = context["image"].detach().cpu()
+            depth_batch = depth.detach().cpu()
+            pair_count = b * v
+            if pair_count > 0:
+                fig, axes = plt.subplots(pair_count, 1, figsize=(10, 3 * pair_count))
+                if isinstance(axes, np.ndarray):
+                    axes = axes.ravel()
+                else:
+                    axes = np.array([axes])
+                cmap = plt.get_cmap("magma")
+                plot_idx = 0
+                for b_idx in range(b):
+                    for v_idx in range(v):
+                        rgb = (
+                            rgb_batch[b_idx, v_idx]
+                            .permute(1, 2, 0)
+                            .clamp(0, 1)
+                            .numpy()
+                        )
+                        depth_np = depth_batch[b_idx, v_idx].numpy()
+                        finite_mask = np.isfinite(depth_np)
+                        if finite_mask.any():
+                            valid_depth = depth_np[finite_mask]
+                            d_min = float(valid_depth.min())
+                            d_max = float(valid_depth.max())
+                        else:
+                            d_min, d_max = 0.0, 1.0
+                        denom = d_max - d_min
+                        if denom < 1e-8:
+                            depth_norm = np.zeros_like(depth_np)
+                        else:
+                            depth_norm = np.clip((depth_np - d_min) / denom, 0.0, 1.0)
+                        depth_rgb = cmap(depth_norm)[..., :3]
+                        combined = np.concatenate((rgb, depth_rgb), axis=1)
+                        axes[plot_idx].imshow(combined)
+                        axes[plot_idx].set_title(f"b={b_idx} v={v_idx}")
+                        axes[plot_idx].axis("off")
+                        plot_idx += 1
+                plt.tight_layout()
+                debug_path = Path(
+                    "/root/incremental_splat/ros_ws/src/incremental_splat/src/temp/context_depths.png"
+                )
+                debug_path.parent.mkdir(parents=True, exist_ok=True)
+                fig.savefig(debug_path)
+                plt.close(fig)
+        '''
 
         if self.cfg.train_depth_only:
             # convert format

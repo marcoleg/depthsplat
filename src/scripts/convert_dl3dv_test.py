@@ -12,6 +12,8 @@ from tqdm import tqdm
 import argparse
 import json
 import os
+from io import BytesIO
+import matplotlib.pyplot as plt
 
 from glob import glob
 
@@ -39,7 +41,6 @@ args = parser.parse_args()
 INPUT_DIR = Path(args.input_dir)
 OUTPUT_DIR = Path(args.output_dir)
 
-
 # Target 200 MB per chunk.
 TARGET_BYTES_PER_CHUNK = int(2e8)
 
@@ -66,18 +67,23 @@ def load_raw(path: Path) -> UInt8[Tensor, " length"]:
     return torch.tensor(np.memmap(path, dtype="uint8", mode="r"))
 
 
-def load_images(example_path: Path) -> dict[int, UInt8[Tensor, "..."]]:
+def load_images(example_path: Path) -> dict[str, UInt8[Tensor, "..."]]:
     """Load JPG images as raw bytes (do not decode)."""
-    return {
-        int(path.stem.split("_")[-1]): load_raw(path)
-        for path in example_path.iterdir()
-        if path.suffix.lower() not in [".npz"]
-    }
+    return_dict = {}
+    for path in example_path.iterdir():
+        if path.suffix.lower() in [".npz"]: continue
+
+        if "new" in path.name:
+            curr_ts = "new_" + os.path.basename(path).split(".")[0].split("_")[-1]
+        else:
+            curr_ts = os.path.basename(path).split(".")[0].split("_")[-1]
+        return_dict[curr_ts] = load_raw(path)
+    return return_dict
 
 
 class Metadata(TypedDict):
     url: str
-    timestamps: Int[Tensor, " camera"]
+    timestamps: list[str]
     cameras: Float[Tensor, "camera entry"]
 
 
@@ -112,13 +118,16 @@ def load_metadata(example_path: Path) -> Metadata:
     opencv_c2ws = []  # will be used to calculate camera distance
 
     for frame in meta_data["frames"]:
-        timestamps.append(
-            int(os.path.basename(frame["file_path"]).split(".")[0].split("_")[-1])
-        )
-        camera = [saved_fx, saved_fy, saved_cx, saved_cy, 0.0, 0.0]
-        # transform_matrix is in blender c2w, while we need to store opencv w2c matrix here
 
-        # TODO: decide what dataset to use
+        if "new" in frame["file_path"]:
+            curr_ts = "new_" + os.path.basename(frame["file_path"]).split(".")[0].split("_")[-1]
+        else:
+            curr_ts = os.path.basename(frame["file_path"]).split(".")[0].split("_")[-1]
+
+        timestamps.append(curr_ts)
+        camera = [saved_fx, saved_fy, saved_cx, saved_cy, 0.0, 0.0]
+        
+        # transform_matrix is in blender c2w, while we need to store opencv w2c matrix here
         # opencv_c2w = np.array(frame["transform_matrix"]) @ blender2opencv                     # DL3DV DATASET
         # opencv_c2w = np.array(frame["transform_matrix"]) @ ros2blender.T @ blender2opencv     # REAL ZED DATA
         opencv_c2w = np.array(frame["transform_matrix"]) @ ned2opencv.T                         # SIM AIRSIM DATA
@@ -128,7 +137,7 @@ def load_metadata(example_path: Path) -> Metadata:
         cameras.append(np.array(camera))
 
     # timestamp should be the one that match the above images keys, use for indexing
-    timestamps = torch.tensor(timestamps, dtype=torch.int64)
+    # timestamps = torch.tensor(timestamps, dtype=torch.int64)
     cameras = torch.tensor(np.stack(cameras), dtype=torch.float32)
 
     return {"url": url, "timestamps": timestamps, "cameras": cameras}
@@ -244,7 +253,8 @@ if __name__ == "__main__":
                 # Merge the images into the example.
                 try:
                     example["images"] = [
-                        images[timestamp.item()] for timestamp in example["timestamps"]
+                        images[timestamp] for timestamp in example["timestamps"]
+                        # images[timestamp.item()] for timestamp in example["timestamps"]
                     ]
                 except:
                     error_msg = f"---------> [ERROR] Some images missing in {key}, skip."

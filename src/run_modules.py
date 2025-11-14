@@ -9,14 +9,15 @@ import sys
 import argparse
 import threading
 import time
+from tkinter import Image
 from typing import Any
 
 import matplotlib.pyplot as plt
 import numpy as np
 from multiprocessing import shared_memory
 from scipy.spatial.transform import Rotation as R
-
 from hydra import compose, initialize  # direttamente da Hydra
+from PIL import Image
 
 from src.main_modules import (
     create_depthsplat_session,
@@ -236,11 +237,16 @@ def prepare_ds_newframes(session, command_server, T_rel, index, last_pose=None, 
     last_pose = new_pose
     str_context = str(command_server.output_dict.get('context'))
     context_dir_name = str_context.replace(', ', '-').replace('[', '').replace(']', '')
-    shutil.copy(os.path.join('/root/incremental_splat/ros_ws/src/incremental_splat/src/temp', 'input', 
-                            command_server.output_dict.get('seq_name'), 'gaussian_splat', 'images_4',
-                            f'frame_{command_server.output_dict.get("context")[0]:0>5}.png'),
-                        os.path.join('/root/incremental_splat/ros_ws/src/incremental_splat/src/temp', 'input',
-                            command_server.output_dict.get('seq_name'), 'gaussian_splat', 'images_4', f'frame_new_{index}.png'))
+
+    new_frame_path = os.path.join(
+        '/root/incremental_splat/ros_ws/src/incremental_splat/src/temp',
+        'input',
+        command_server.output_dict.get('seq_name'),
+        'gaussian_splat',
+        'images_4',
+        f'frame_new_{index}.png',
+    )
+    Image.fromarray(np.zeros((480, 640, 3), dtype=np.uint8)).save(new_frame_path)
 
     if index > 0:
         new_dl3dv_json = {command_server.output_dict.get('seq_name'): {
