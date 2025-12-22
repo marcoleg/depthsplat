@@ -7,6 +7,7 @@ import socket
 import subprocess
 import sys
 import argparse
+import importlib.util
 import threading
 import time
 from tkinter import Image
@@ -24,6 +25,17 @@ from src.main_modules import (
     load_pretrained_weights,
     run_inference,
 )
+
+_DIFIX_PIPELINE_PATH = "/root/Difix3D/src/model.py"
+_DIFIX_MODULE_DIR = os.path.dirname(_DIFIX_PIPELINE_PATH)
+if _DIFIX_MODULE_DIR not in sys.path:
+    sys.path.insert(0, _DIFIX_MODULE_DIR)
+_difix_spec = importlib.util.spec_from_file_location("model", _DIFIX_PIPELINE_PATH)
+if _difix_spec is None or _difix_spec.loader is None:
+    raise ImportError(f"Cannot load DifixPipeline from {_DIFIX_PIPELINE_PATH}")
+_difix_module = importlib.util.module_from_spec(_difix_spec)
+_difix_spec.loader.exec_module(_difix_module)
+DifixPipeline = _difix_module.Difix
 
 
 def _to_shared(arr: np.ndarray):
@@ -137,29 +149,30 @@ def run_depthsplat_pipeline() -> object:
 
     with initialize(version_base=None, config_path="../config"):
         cfg = compose(config_name="main", overrides=["mode=test", "+experiment=dl3dv",
-                                                     "dataset/view_sampler=evaluation",
-                                                     "checkpointing.pretrained_model=pretrained/depthsplat-gs-base-dl3dv-256x448-randview2-6-02c7b19d.pth",
-                                                     # "train.forward_depth_only=true",
-                                                     # "checkpointing.pretrained_depth=pretrained/depthsplat-depth-base-352x640-randview2-8-65a892c5.pth",
-                                                     "dataset.roots=[/root/incremental_splat/ros_ws/src/incremental_splat/src/temp/output]",
-                                                     "dataset.image_shape=" + str(image_shape),
-                                                     "data_loader.test.num_workers=0",
-                                                     "dataset.ori_image_shape=" + str(ori_image_shape),
-                                                     "dataset.view_sampler.index_path=/root/incremental_splat/ros_ws/src/incremental_splat/src/temp/dl3dv.json",
+                                                    "dataset/view_sampler=evaluation",
+                                                    "checkpointing.pretrained_model=pretrained/depthsplat-gs-base-dl3dv-256x448-randview2-6-02c7b19d.pth",
+                                                    # "train.forward_depth_only=true",
+                                                    # "checkpointing.pretrained_depth=pretrained/depthsplat-depth-base-352x640-randview2-8-65a892c5.pth",
+                                                    "dataset.roots=[/root/incremental_splat/ros_ws/src/incremental_splat/src/temp/output]",
+                                                    "dataset.image_shape=" + str(image_shape),
+                                                    "data_loader.test.num_workers=0",
+                                                    "dataset.ori_image_shape=" + str(ori_image_shape),
+                                                    "dataset.view_sampler.index_path=/root/incremental_splat/ros_ws/src/incremental_splat/src/temp/dl3dv.json",
                                                      "model.encoder.num_scales=2",
-                                                     "model.encoder.upsample_factor=4",
-                                                     "model.encoder.lowest_feature_resolution=8",
-                                                     "model.encoder.monodepth_vit_type=vitb",
-                                                     "dataset.view_sampler.num_context_views=6", # %s" % str(len(context[0])+len(context[1])),
-                                                     "test.stablize_camera=false",
-                                                     "test.compute_scores=false",
-                                                     "test.save_image=true",
-                                                     "test.compute_image=true",
-                                                     "output_dir=/root/incremental_splat/ros_ws/src/incremental_splat/src/temp/output/data",
-                                                     "test.save_depth=true",
-                                                     "test.process_pc=true",
-                                                     "test.save_gaussian=true",
-                                                     ])
+                                                    "model.encoder.upsample_factor=4",
+                                                    "model.encoder.lowest_feature_resolution=8",
+                                                    "model.encoder.monodepth_vit_type=vitb",
+                                                    # "dataset.view_sampler.num_context_views=12", # override in dl3dv.json --> NOT USED
+                                                    # "model.encoder.gaussian_adapter.gaussian_scale_max=0.1",
+                                                    "test.stablize_camera=false",
+                                                    "test.compute_scores=false",
+                                                    "test.save_image=true",
+                                                    "test.compute_image=true",
+                                                    "output_dir=/root/incremental_splat/ros_ws/src/incremental_splat/src/temp/output/data",
+                                                    "test.save_depth=true",
+                                                    "test.process_pc=true",
+                                                    "test.save_gaussian=true",
+                                                    ])
     config_time = time.time()
     cfg.dataset.target_names = ["new_0"]
 
@@ -167,9 +180,18 @@ def run_depthsplat_pipeline() -> object:
     session_time = time.time()
 
     load_pretrained_weights(session, stage="test")
+
+    model = DifixPipeline(
+        pretrained_name=None,
+        pretrained_path="/root/Difix3D/outputs/difix/train/checkpoints/model_v3.pkl",
+        timestep=199,
+        mv_unet=True,
+    )
+    model.set_eval()
+
     weights_time = time.time()
 
-    return session, config_time, session_time, weights_time, t_start
+    return session, model, config_time, session_time, weights_time, t_start
 
 def prepare_ds_inputs():
     command = [
@@ -270,7 +292,7 @@ if __name__ == "__main__":
     rot_mat = R.from_euler('xyz', args.target_rpy, degrees=True).as_matrix().tolist()
     T_rel = np.array([rot_mat[0]+[args.target_xyz[0]], rot_mat[1]+[args.target_xyz[1]], rot_mat[2]+[args.target_xyz[2]], [0.0, 0.0, 0.0, 1.0]])
 
-    session, config_time, session_time, weights_time, t_start = run_depthsplat_pipeline()
+    session, pipe, config_time, session_time, weights_time, t_start = run_depthsplat_pipeline()
     inference_time = time.time()
     cmd_host = os.environ.get("DEPTHSPLAT_CMD_HOST", "127.0.0.1")
     cmd_port = int(os.environ.get("DEPTHSPLAT_CMD_PORT", "5555"))
@@ -298,16 +320,34 @@ if __name__ == "__main__":
                 shutil.move(os.path.join('/root/incremental_splat/ros_ws/src/incremental_splat/src/temp', 'output', 'data', 'gaussians', seq_name + '_FILTERED.ply'),
                             os.path.join('/root/incremental_splat/ros_ws/src/incremental_splat/src/temp', 'output', 'data', 'gaussians', f'ORIG_{seq_name}_FILTERED.ply'))
                 if args.N > 0:
+                    prompt = "remove degradation"
                     for n in range (args.N):
-                        run_difix(seq_name=seq_name, 
-                                  context=context,
-                                  new_frame_name=f'frame_new_{n}.png',
-                                  context_dir_name=context_dir_name)
+                        input_image = os.path.join('/root/incremental_splat/ros_ws/src/incremental_splat/src/temp', 'output', 'data', 'images', seq_name, context_dir_name, f'frame_new_{n}.png')
+                        input_image = Image.open(input_image)
+                        ref_image = os.path.join('/root/incremental_splat/ros_ws/src/incremental_splat/src/temp', 'input', seq_name, 'gaussian_splat', 'images_4', f'frame_{context[0]:0>5}.png')
+                        ref_image = Image.open(ref_image)
+                        output_image = pipe.sample(
+                            input_image,
+                            height=480,
+                            width=640,
+                            ref_image=ref_image,
+                            prompt=prompt
+                        )
+
+                        # output_image = pipe(prompt, image=input_image, ref_image=ref_image,   num_inference_steps=1, timesteps=[199], guidance_scale=0.0).images[0]
+                        output_image.save(os.path.join('/root/incremental_splat/ros_ws/src/incremental_splat/src/temp', 'input', seq_name, 'gaussian_splat', 'images_4', f'frame_new_{n}.png'))
+
+                        # run_difix(seq_name=seq_name, 
+                        #           context=context,
+                        #           new_frame_name=f'frame_new_{n}.png',
+                        #           context_dir_name=context_dir_name)
                         if n == args.N - 1:
                             session.cfg.test.save_gaussian = True
+                            session.cfg.test.process_pc = True
                         else:
                             session.cfg.test.save_gaussian = False
-                        
+                            session.cfg.test.process_pc = False
+
                         context.append(target[0] + n)
                         last_pose, context_dir_name = prepare_ds_newframes(session, command_server, T_rel, index=n+1, last_pose=last_pose, context=context)
                         prepare_ds_inputs()

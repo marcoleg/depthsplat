@@ -181,11 +181,14 @@ def export_ply(
 
         print(f"[export_ply] kept {len(filtered)} / {len(arr)} points ({len(filtered) / len(arr):.1%}) | time: "
               f"{round(time.time() - t0, 3)}s | method: {outlier_method}")
-        if save_pc:
-            plydata.write(str(path).split('.ply')[0] + '_FILTERED.ply')
+    else:
+        filtered = np.array(plydata['vertex'].data)
+        
+    occupancy_grid = pointcloud_to_occupancy_grid(points=filtered)
+    np.save(str(path).split('.ply')[0] + '_grid.npy', occupancy_grid)
 
-        occupancy_grid = pointcloud_to_occupancy_grid(points=filtered)
-        np.save(str(path).split('.ply')[0] + '_grid.npy', occupancy_grid)
+    if save_pc:
+        plydata.write(str(path).split('.ply')[0] + '_FILTERED.ply')
 
     return occupancy_grid
 
