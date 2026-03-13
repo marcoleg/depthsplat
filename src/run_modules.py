@@ -281,6 +281,20 @@ def prepare_ds_newframes(session, command_server, T_rel, index, last_pose=None, 
     return last_pose, context_dir_name
 
 
+def _set_context_indices(session, indices: Any) -> None:
+    if indices is None:
+        indices_list = []
+    elif isinstance(indices, (list, tuple)):
+        indices_list = list(indices)
+    else:
+        indices_list = [indices]
+    session.model_wrapper.context_indices = indices_list
+    try:
+        session.cfg_dict["dataset"]["context_indices"] = indices_list
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--N", type=int, help="Times that we take (last+K)-th frame", default=0)
@@ -304,7 +318,6 @@ if __name__ == "__main__":
     try:
         print("[CommandServer] Listening for incoming triggers (Ctrl+C to stop).")
         while True:
-
             if command_server.output_dict['flag']:
                 print(command_server.output_dict.get('context'))
                 print("Received trigger:", command_server.output_dict['flag'], '\nSeq_name:', command_server.output_dict['seq_name'],)
@@ -312,6 +325,8 @@ if __name__ == "__main__":
                 seq_name = command_server.output_dict.get('seq_name')
                 context = command_server.output_dict.get('context')
                 target = command_server.output_dict.get('target')
+
+                _set_context_indices(session, context)
 
                 last_pose, context_dir_name = prepare_ds_newframes(session, command_server, T_rel, index=0) 
                 prepare_ds_inputs()

@@ -1,15 +1,19 @@
 from pathlib import Path
 
 import numpy as np
+import scipy
+import os
 import torch
+import matplotlib.pyplot as plt
 from einops import einsum, rearrange, repeat
 from jaxtyping import Float
 from plyfile import PlyData, PlyElement
 from scipy.spatial.transform import Rotation as R
-from torch import Tensor
+from torch import Tensor, sigmoid
 import open3d as o3d
 import time, warnings
 from ..global_cfg import get_cfg
+
 
 
 def construct_list_of_attributes(num_rest: int) -> list[str]:
@@ -25,7 +29,51 @@ def construct_list_of_attributes(num_rest: int) -> list[str]:
         attributes.append(f"rot_{i}")
     return attributes
 
-def pointcloud_to_occupancy_grid(points, grid_size=0.1, width=8, height=8, z_threshold=-0.15, z_max=0.5):
+def pointcloud_to_occupancy_grid(points, path, grid_size=0.1, width=100, height=100, z_threshold=0, z_max=1):
+    """
+    Convert 3D point cloud to 2D occupancy grid.
+
+    points: Nx3 NumPy array
+    """
+    t0 = time.time()
+    cols = int(width / grid_size)
+    rows = int(height / grid_size)
+    grid = np.zeros((rows, cols), dtype=np.uint8)
+
+    # Usa indexing standard
+    x_points = points[:, 2] + width / 2.0   # z -> X della griglia
+    y_points = points[:, 0] + height / 2.0  # x -> Y della griglia
+    z_points = -points[:, 1]                # y invertito
+
+    mask = (
+        (x_points >= 0) & (x_points < width) &
+        (y_points >= 0) & (y_points < height) &
+        (z_points > z_threshold) & (z_points < z_max)
+    )
+
+    x_points = x_points[mask]
+    y_points = y_points[mask]
+
+    col_idx = (x_points / grid_size).astype(int)
+    row_idx = (y_points / grid_size).astype(int)
+
+    grid[row_idx, col_idx] = 1
+
+    print(f"[pointcloud_to_occupancy_grid] Generated grid with {np.sum(grid)} occupied cells | time: {round(time.time()-t0,3)}s")
+    
+    plt.imshow(grid, cmap="gray_r", origin="lower")
+    plt.title("Occupancy Grid")
+    plt.xlabel("X")
+    plt.ylabel("Y")
+    seq_name = str(path).split("/")[-1].split(".")[0]
+    if os.path.exists(f'/root/incremental_splat/ros_ws/src/incremental_splat/src/occ_maps/{seq_name}.png'):
+        os.rename(f'/root/incremental_splat/ros_ws/src/incremental_splat/src/occ_maps/{seq_name}.png', 
+                  f'/root/incremental_splat/ros_ws/src/incremental_splat/src/occ_maps/ORIG_{seq_name}.png')
+    plt.savefig(f'/root/incremental_splat/ros_ws/src/incremental_splat/src/occ_maps/{seq_name}.png')
+
+    return grid
+
+'''def pointcloud_to_occupancy_grid(points, grid_size=0.1, width=100, height=100, z_threshold=0, z_max=1):
     """
     Convert 3D point cloud to 2D occupancy grid.
 
@@ -47,7 +95,7 @@ def pointcloud_to_occupancy_grid(points, grid_size=0.1, width=8, height=8, z_thr
 
     # Shift points so that map is centered
     x_points = points["z"] + width / 2.0
-    y_points = -points["x"] + height / 2.0
+    y_points = points["x"] + height / 2.0
     z_points = -points["y"]
 
     # Filter points within map bounds and above threshold
@@ -67,20 +115,20 @@ def pointcloud_to_occupancy_grid(points, grid_size=0.1, width=8, height=8, z_thr
     grid[row_idx, col_idx] = 1
     print(f"[pointcloud_to_occupancy_grid] Generated grid with {np.sum(grid)} occupied cells"
           f" | time: {round(time.time() - t0, 3)}s")
-    # import matplotlib.pyplot as plt
-    # plt.imshow(grid, cmap="gray_r", origin="lower")
-    # plt.title("Occupancy Grid")
-    # plt.xlabel("X")
-    # plt.ylabel("Y")
-    # # plt.scatter(y_points, x_points)
-    # plt.savefig('/root/incremental_splat/ros_ws/src/incremental_splat/src/occupancy_grid.png')
+    import matplotlib.pyplot as plt
+    plt.imshow(grid, cmap="gray_r", origin="lower")
+    plt.title("Occupancy Grid")
+    plt.xlabel("X")
+    plt.ylabel("Y")
+    # plt.scatter(y_points, x_points)
+    plt.savefig('/root/incremental_splat/ros_ws/src/incremental_splat/src/occupancy_grid.png')
 
-    return grid
+    return grid'''
 
 def export_ply(
     extrinsics: Float[Tensor, "4 4"],
     means: Float[Tensor, "gaussian 3"],
-    scales: Float[Tensor, "gaussian 3"],
+    scales_t: Float[Tensor, "gaussian 3"],
     rotations: Float[Tensor, "gaussian 4"],
     harmonics: Float[Tensor, "gaussian 3 d_sh"],
     opacities: Float[Tensor, " gaussian"],
@@ -136,6 +184,7 @@ def export_ply(
     # Since our axes are swizzled for the spherical harmonics, we only export the DC band
     harmonics_view_invariant = harmonics[..., 0]
 
+    """
     dtype_full = [(attribute, "f4") for attribute in construct_list_of_attributes(0)]
     elements = np.empty(means.shape[0], dtype=dtype_full)
     attributes = (
@@ -143,7 +192,7 @@ def export_ply(
         torch.zeros_like(means).detach().cpu().numpy(),
         harmonics_view_invariant.detach().cpu().contiguous().numpy(),
         torch.logit(opacities[..., None]).detach().cpu().numpy(),
-        scales.log().detach().cpu().numpy(),
+        scales_t.log().detach().cpu().numpy(),
         rotations,
     )
     attributes = np.concatenate(attributes, axis=1)
@@ -166,7 +215,7 @@ def export_ply(
                 (arr['z'] >= -25.0))
         close_points = arr[mask]
         opacity = np.array(close_points['opacity'], dtype=np.float32)
-        mask = opacity > -1.5
+        mask = opacity > -3.0
         filtered = close_points[mask]
 
         if outlier_method in ("radi", "stat"):
@@ -179,15 +228,106 @@ def export_ply(
 
         plydata['vertex'].data = filtered
 
-        print(f"[export_ply] kept {len(filtered)} / {len(arr)} points ({len(filtered) / len(arr):.1%}) | time: "
+        print(f"[export_ply] kept {len(filtered)} / {len(points)} points ({len(filtered) / len(points):.1%}) | time: "
               f"{round(time.time() - t0, 3)}s | method: {outlier_method}")
     else:
         filtered = np.array(plydata['vertex'].data)
-        
-    occupancy_grid = pointcloud_to_occupancy_grid(points=filtered)
+    
+    filtered["x"] *= 2.1  # Scale points to match occupancy grid size
+    filtered["y"] *= 2.1  # Scale points to match occupancy grid size
+    filtered["z"] *= 2.1  # Scale points to match occupancy grid size
+    """
+
+    points = means.detach().cpu().numpy()
+    opacity = opacities.detach().cpu().numpy()
+    scales = scales_t.detach().cpu().numpy()
+
+    occupancy_grid: np.ndarray | None = None
+
+    print(f"[export_ply] Exporting {len(points)} Gaussians | time: {round(time.time() - t0, 3)}s")
+
+    if process_pc:
+        t0 = time.time()
+
+        # bounding box filter
+        mask = (
+            (points[:, 0] <= 20.0) &
+            (points[:, 0] >= -20.0) &
+            (points[:, 1] <= 5.0) &
+            (points[:, 1] >= -5.0) &
+            (points[:, 2] <= 25.0) &
+            (points[:, 2] >= -25.0)
+        )
+
+        points = points[mask]
+        opacity = opacity[mask]
+        scales = scales[mask]
+
+        # mask = opacity > -3.0
+        opacity = 1 / (1 + np.exp(-opacity))
+        mask = opacity > 0.1
+
+        # scale = exp(scale_log)
+        # mask = scale.mean(axis=1) < threshold
+
+        points = points[mask]
+        opacity = opacity[mask]
+        scales = scales[mask]
+
+        """
+        if outlier_method in ("radi", "stat"):
+
+            xyz = points.astype(np.float64)
+
+            if outlier_method == "radi":
+                mask_o3d = _mask_radius_xyz(xyz, radius=radius, min_neighbors=min_neighbors)
+            else:
+                mask_o3d = _mask_stat_xyz(xyz, nb_neighbors=nb_neighbors, std_ratio=std_ratio)
+
+            points = points[mask_o3d]
+            opacity = opacity[mask_o3d]
+            scales = scales[mask_o3d]
+        """
+        voxel_size = 0.3
+        vox = np.floor(points / voxel_size).astype(np.int32)
+        unique_vox, counts = np.unique(vox, axis=0, return_counts=True)
+        dense_vox = unique_vox[counts > 250]
+        dense_set = set(map(tuple, dense_vox))
+        mask = np.array([tuple(v) in dense_set for v in vox])
+        points = points[mask]
+      
+
+        print(
+            f"[export_ply] kept {len(points)} / {len(means)} points "
+            f"({len(points) / len(means):.1%}) | time: {round(time.time() - t0, 3)}s"
+        )
+
+    # scaling
+    points[:,0] *= 2.1
+    points[:,1] *= 2.1
+    points[:,2] *= 2.1
+
+    filtered = points
+
+    occupancy_grid = pointcloud_to_occupancy_grid(points=filtered, path=path)
+
     np.save(str(path).split('.ply')[0] + '_grid.npy', occupancy_grid)
 
     if save_pc:
+        dtype_full = [(attribute, "f4") for attribute in construct_list_of_attributes(0)]
+        elements = np.empty(means.shape[0], dtype=dtype_full)
+        attributes = (
+            means.detach().cpu().numpy(),
+            torch.zeros_like(means).detach().cpu().numpy(),
+            harmonics_view_invariant.detach().cpu().contiguous().numpy(),
+            torch.logit(opacities[..., None]).detach().cpu().numpy(),
+            scales_t.log().detach().cpu().numpy(),
+            rotations,
+        )
+        attributes = np.concatenate(attributes, axis=1)
+        elements[:] = list(map(tuple, attributes))
+        path.parent.mkdir(exist_ok=True, parents=True)
+        plydata = PlyData([PlyElement.describe(elements, "vertex")])
         plydata.write(str(path).split('.ply')[0] + '_FILTERED.ply')
 
     return occupancy_grid
@@ -233,8 +373,7 @@ def save_gaussian_ply(gaussians, visualization_dump, example, save_path, save_pc
     world_rotations = torch.from_numpy(world_rotations).to(
         visualization_dump["scales"]
     )
-    print(f"[save_gaussian_ply] Preprocess data | time: {round(time.time() - t0, 3)}s")
-    t0 = time.time()
+    
     eply = export_ply(
         example["context"]["extrinsics"][0, 0],
         trim(gaussians.means)[0],
@@ -246,6 +385,7 @@ def save_gaussian_ply(gaussians, visualization_dump, example, save_path, save_pc
         save_pc,
         process_pc,
     )
+
     print(f"[save_gaussian_ply] Export .PLY | time: {round(time.time() - t0, 3)}s")
     return eply
 
