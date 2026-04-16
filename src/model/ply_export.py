@@ -29,7 +29,7 @@ def construct_list_of_attributes(num_rest: int) -> list[str]:
         attributes.append(f"rot_{i}")
     return attributes
 
-def pointcloud_to_occupancy_grid(points, path, grid_size=0.1, width=100, height=100, z_threshold=0, z_max=1):
+def pointcloud_to_occupancy_grid(points, path, grid_size=0.1, width=100, height=100, z_threshold=-0.5, z_max=1):
     """
     Convert 3D point cloud to 2D occupancy grid.
 
@@ -127,7 +127,7 @@ def pointcloud_to_occupancy_grid(points, path, grid_size=0.1, width=100, height=
 
 def export_ply(
     extrinsics: Float[Tensor, "4 4"],
-    means: Float[Tensor, "gaussian 3"],
+    means: Float[Tensor, "gaussians 3"],
     scales_t: Float[Tensor, "gaussian 3"],
     rotations: Float[Tensor, "gaussian 4"],
     harmonics: Float[Tensor, "gaussian 3 d_sh"],
