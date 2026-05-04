@@ -29,7 +29,7 @@ def construct_list_of_attributes(num_rest: int) -> list[str]:
         attributes.append(f"rot_{i}")
     return attributes
 
-def pointcloud_to_occupancy_grid(points, path, grid_size=0.1, width=100, height=100, z_threshold=-0.5, z_max=1):
+def pointcloud_to_occupancy_grid(points, path, grid_size=0.1, width=100, height=100, z_threshold=0.5, z_max=1.5):
     """
     Convert 3D point cloud to 2D occupancy grid.
 
@@ -42,7 +42,7 @@ def pointcloud_to_occupancy_grid(points, path, grid_size=0.1, width=100, height=
 
     # Usa indexing standard
     x_points = points[:, 2] + width / 2.0   # z -> X della griglia
-    y_points = points[:, 0] + height / 2.0  # x -> Y della griglia
+    y_points = -points[:, 0] + height / 2.0  # x -> Y della griglia
     z_points = -points[:, 1]                # y invertito
 
     mask = (

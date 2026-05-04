@@ -142,7 +142,7 @@ def launch_consumer_different_interp(python_exe: str, consumer_script: str, meta
 
 def run_depthsplat_pipeline() -> object:
     scale_factor = 1
-    ori_image_shape = [480, 640]  # airsim
+    ori_image_shape = [360, 640] # zed21 ## [480, 640]  # airsim
     image_shape = [int(scale_factor * ori_image_shape[0]), int(scale_factor * ori_image_shape[1])]
 
     t_start = time.time()
@@ -220,8 +220,8 @@ def run_difix(seq_name, context, new_frame_name, context_dir_name=None):
         python_exec,
         "/root/Difix3D/src/inference_difix.py",
         "--input_image", os.path.join('/root/incremental_splat/ros_ws/src/incremental_splat/src/temp', 'output', 'data', 'images', seq_name, context_dir_name, new_frame_name),
-        "--height", "480",  # 360 -> 320
-        "--width", "640",   # 640 -> 576
+        "--height", "360",  # 480 (airsim) -> 320
+        "--width", "640",   # 640 (airsim) -> 576
         "--prompt", "",
         "--model_path", "/root/Difix3D/outputs/difix/train/checkpoints/model_v3.pkl",
         "--output_dir", os.path.join('/root/incremental_splat/ros_ws/src/incremental_splat/src/temp', 'input', seq_name, 'gaussian_splat', 'images_4'),
@@ -252,8 +252,10 @@ def prepare_ds_newframes(session, command_server, T_rel, index, last_pose=None, 
 
     new_pose = np.array(last_pose) @ T_rel  # ned reference system
     ned2opencv = np.array([[0, 1, 0, 0], [0, 0, 1, 0], [1, 0, 0, 0], [0, 0, 0, 1]])
-    target_pose = new_pose @ ned2opencv.T  # opencv reference system
-    # target_pose = new_pose 
+    blender2opencv = np.array([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
+    ros2blender = np.array([[0, -1, 0, 0], [0, 0, 1, 0], [-1, 0, 0, 0], [0, 0, 0, 1]])
+    # target_pose = new_pose @ ned2opencv.T  # opencv reference system (from airsim)
+    target_pose = new_pose @ ros2blender.T @ blender2opencv # opencv reference system (from zed)
     session.cfg.dataset.target_poses = [target_pose.tolist()]
     _update_transforms_json(command_server.output_dict.get('seq_name'), f'frame_new_{index}.png', new_pose=new_pose.tolist())
     last_pose = new_pose
@@ -268,7 +270,7 @@ def prepare_ds_newframes(session, command_server, T_rel, index, last_pose=None, 
         'images_4',
         f'frame_new_{index}.png',
     )
-    Image.fromarray(np.zeros((480, 640, 3), dtype=np.uint8)).save(new_frame_path)
+    Image.fromarray(np.zeros((360, 640, 3), dtype=np.uint8)).save(new_frame_path)  # su airsim 360 è 480
 
     if index > 0:
         new_dl3dv_json = {command_server.output_dict.get('seq_name'): {

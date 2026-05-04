@@ -325,6 +325,7 @@ def run_inference(session: DepthSplatSession, *, load_weights: bool = True) -> d
         load_pretrained_weights(session, stage="test")
 
     session.model_wrapper.latest_result = None
+
     session.trainer.test(
         session.model_wrapper,
         datamodule=session.data_module,
