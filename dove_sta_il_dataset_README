@@ -1,1 +1,16 @@
-il dataset, ossia la il contenuto della cartella 'outputs' è dentro l'HDD Generic, dentro la cartella depthsplat
+Dentro la cartella 'outputs' nell'HDD 'Generic':
+    - depthsplat-dl3dv-512x960
+        - images:
+            - seq_1:
+                - 10-11-12-13-14-15-16-17-18-19:  # sono gli indici delle immagini del dl3dv che abbiamo usato come context
+                    - frame_00021  # target view, ossia immagine presa da depthsplat costruito con immagini context 
+                    - frame_00023  # stessa cosa ma con difficoltà, e quindi distanza, crescente
+                    - frame_00025
+                    - ...
+            - seq_2
+            - ...
+
+Dentro il NAS, sftp://10.8.1.40/Dataset/DL3DV:
+    - benchmark  # è il dataset del DL3DV
+    - data_extraction
+        - caption
